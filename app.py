@@ -30,29 +30,29 @@ import PyPDF2
 #  CẤU HÌNH TÀI KHOẢN (thêm luật sư mới ở đây)
 # ─────────────────────────────────────────────
 TAI_KHOAN = {
-    "ls.nguyen": {
+    "ls.lan": {
         "mat_khau": "123456",
-        "ho_ten":   "Luật sư Nguyễn Văn A",
-        "chuc_vu":  "Luật sư thành viên",
+        "ho_ten":   "Luật sư Nguyễn Thị Thanh Lan",
+        "chuc_vu":  "Counsel",
         "vai_tro":  "luat_su",
     },
-    "ls.tran": {
+    "ls.dong": {
         "mat_khau": "123456",
-        "ho_ten":   "Luật sư Trần Thị B",
-        "chuc_vu":  "Luật sư cộng tác",
+        "ho_ten":   "Luật sư Lê Viễn Đông",
+        "chuc_vu":  "Trưởng CN Đà Nẵng",
         "vai_tro":  "luat_su",
     },
     "admin": {
-        "mat_khau": "admin2025",
+        "mat_khau": "admin2026",
         "ho_ten":   "Quản trị viên",
         "chuc_vu":  "Quản lý hệ thống",
         "vai_tro":  "quan_tri",
     },
 }
 
-TEN_CONG_TY = "CÔNG TY LUẬT TNHH ABC & PARTNERS"
-DIA_CHI_CT  = "Số 123, Đường Lê Lợi, TP. Pleiku, Gia Lai"
-SBT_CT      = "SĐT: 0269.xxx.xxx | Email: contact@abclaw.vn"
+TEN_CONG_TY = "CÔNG TY LUẬT TNHH MINH TÚ"
+DIA_CHI_CT  = "số 4/9 đường số 3, Cư Xá Đô Thành, Phường Bàn Cờ, TP. Hồ Chí Minh","số 81 Xô Viết Nghệ Tĩnh, Phường Cẩm Lệ, TP. Đà Nẵng"
+SBT_CT      = "SĐT: 19000031 | Email: info.luatminhtu@gmail.com"
 
 # ─────────────────────────────────────────────
 #  KHỞI TẠO TRANG
