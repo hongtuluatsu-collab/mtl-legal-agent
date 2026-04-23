@@ -17,7 +17,7 @@ import json
 import base64
 import io
 import os
-import re
+import re import os
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
@@ -405,8 +405,8 @@ with st.sidebar:
     st.markdown("---")
 
     # API Key
-    api_key = st.text_input(
-        "🔑 Anthropic API Key",
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or st.text_input(
+        "🔑 Anthropic API Key (nếu chưa cấu hình)",
         type="password",
         placeholder="sk-ant-...",
         help="Lấy tại: console.anthropic.com"
