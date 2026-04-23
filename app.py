@@ -397,7 +397,7 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
             doc.add_paragraph()
             continue
         dong_sach = dong.replace("**", "").replace("###", "").replace("##", "").replace("# ", "")
-        la_tieu_de = dong.isupper() or re.match(r"^\d+[\.\)]\s", dong) or dong.startswith("**")
+        la_tieu_de = bool(dong.isupper() or re.match(r"^\d+[\.\)]\s", dong) or dong.startswith("**"))
         p = them_doan(dong_sach, size=12, bold=la_tieu_de, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
         if not la_tieu_de:
             p.paragraph_format.first_line_indent = Cm(1.0)
