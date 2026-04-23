@@ -17,7 +17,7 @@ import json
 import base64
 import io
 import os
-import re import os
+import re
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
