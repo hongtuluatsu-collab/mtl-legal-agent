@@ -24,10 +24,11 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import PyPDF2
 
 # =============================================================
-#  ★★★  DÁN API KEY VÀO ĐÂY — CHỈ LÀM 1 LẦN  ★★★
-#  Lấy key tại: https://console.anthropic.com
+#  API KEY — được cấu hình trong Railway Variables
+#  (Không điền key vào đây, GitHub sẽ tự xóa!)
+#  Hướng dẫn: Railway → tab Variables → thêm ANTHROPIC_API_KEY
 # =============================================================
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = ""
 # =============================================================
 
 # ─────────────────────────────────────────────
