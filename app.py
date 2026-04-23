@@ -357,55 +357,235 @@ def hoi_dap(lich_su, cau_hoi, files=None):
     return goi_claude(messages, system)
 
 # ─────────────────────────────────────────────
-#  TẠO FILE WORD
+#  TẠO FILE WORD — ĐỊNH DẠNG MTL PREMIUM
 # ─────────────────────────────────────────────
+# Màu MTL chuẩn (lấy từ file mẫu công ty)
+C_NAVY      = RGBColor(0x1B, 0x4A, 0x7A)   # Navy chính
+C_NAVY_DARK = RGBColor(0x16, 0x3D, 0x66)   # Navy đậm
+C_GOLD      = RGBColor(0xB8, 0x97, 0x3A)   # Vàng đồng
+C_GOLD2     = RGBColor(0xCD, 0xB0, 0x60)   # Vàng sáng
+C_WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
+C_DARK      = RGBColor(0x1E, 0x29, 0x3B)   # Chữ chính
+C_MUTED     = RGBColor(0x64, 0x74, 0x8B)   # Chữ phụ
+
+def _set_cell_bg(cell, hex_color):
+    """Tô màu nền ô bảng"""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), hex_color)
+    tcPr.append(shd)
+
+def _set_cell_border(cell, top=None, bottom=None, left=None, right=None):
+    """Đặt viền ô"""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcBorders = OxmlElement('w:tcBorders')
+    for side, val in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
+        if val:
+            el = OxmlElement(f'w:{side}')
+            el.set(qn('w:val'), val.get('val', 'single'))
+            el.set(qn('w:sz'), str(val.get('sz', 4)))
+            el.set(qn('w:color'), val.get('color', 'auto'))
+            tcBorders.append(el)
+    tcPr.append(tcBorders)
+
+def _run(para, text, size, bold=False, italic=False, color=None):
+    run = para.add_run(text)
+    run.font.name = "Times New Roman"
+    run.font.size = Pt(size)
+    run.font.bold = bold
+    run.font.italic = italic
+    if color:
+        run.font.color.rgb = color
+    return run
+
 def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from docx.shared import Inches
+
     doc = Document()
-    section = doc.sections[0]
-    section.page_width    = Cm(21)
-    section.page_height   = Cm(29.7)
-    section.top_margin    = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin   = Cm(3.0)
-    section.right_margin  = Cm(2.0)
 
-    def them_doan(text, size=12, bold=False, italic=False, align=WD_ALIGN_PARAGRAPH.LEFT, color=None):
-        p = doc.add_paragraph()
-        p.alignment = align
-        run = p.add_run(text)
-        run.font.name = "Times New Roman"
-        run.font.size = Pt(size)
-        run.font.bold = bold
-        run.font.italic = italic
-        if color:
-            run.font.color.rgb = color
-        return p
+    # ── Thiết lập trang A4 ──
+    sec = doc.sections[0]
+    sec.page_width    = Cm(21)
+    sec.page_height   = Cm(29.7)
+    sec.top_margin    = Cm(1.2)
+    sec.bottom_margin = Cm(1.2)
+    sec.left_margin   = Cm(1.2)
+    sec.right_margin  = Cm(1.2)
 
-    them_doan(TEN_CONG_TY, size=14, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER, color=RGBColor(0x1E, 0x4D, 0x82))
-    them_doan(DIA_CHI_CT, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
-    them_doan(DIA_CHI_DN, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
-    them_doan(SBT_CT, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
-    them_doan("─" * 60, align=WD_ALIGN_PARAGRAPH.CENTER)
+    # Xóa spacing mặc định
+    style = doc.styles['Normal']
+    style.font.name = "Times New Roman"
+    style.paragraph_format.space_before = Pt(0)
+    style.paragraph_format.space_after  = Pt(0)
+
+    # ── HEADER: Logo + Tiêu đề tài liệu ──
+    tbl_header = doc.add_table(rows=1, cols=2)
+    tbl_header.style = 'Table Grid'
+    tbl_header.autofit = False
+    tbl_header.columns[0].width = Cm(7)
+    tbl_header.columns[1].width = Cm(11.8)
+
+    # Ô trái: logo
+    cell_logo = tbl_header.cell(0, 0)
+    _set_cell_bg(cell_logo, "1B4A7A")
+    p_logo = cell_logo.paragraphs[0]
+    p_logo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Nhúng logo nếu có file
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.jpg")
+    if os.path.exists(logo_path):
+        run_logo = p_logo.add_run()
+        run_logo.add_picture(logo_path, width=Cm(5.5))
+    else:
+        _run(p_logo, "MINHTU LAW CO., LTD", 12, bold=True, color=C_WHITE)
+
+    # Ô phải: loại tài liệu
+    cell_title = tbl_header.cell(0, 1)
+    _set_cell_bg(cell_title, "FFFFFF")
+    cell_title.width = Cm(11.8)
+    p_type = cell_title.paragraphs[0]
+    p_type.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_type.paragraph_format.space_before = Pt(12)
+    _run(p_type, tieu_de.upper(), 11, bold=True, color=C_NAVY)
+    p_sub = cell_title.add_paragraph()
+    p_sub.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _run(p_sub, f"Ngày {datetime.now().strftime('%d/%m/%Y')}", 8.5, color=C_MUTED)
+    p_sub2 = cell_title.add_paragraph()
+    p_sub2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _run(p_sub2, f"Người soạn: {ten_ls}  ·  {chuc_vu}", 8, italic=True, color=C_MUTED)
+
     doc.add_paragraph()
-    them_doan(tieu_de.upper(), size=14, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
-    them_doan(f"(Ngày {datetime.now().strftime('%d tháng %m năm %Y')})", size=11, italic=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+
+    # ── BANNER: RIÊNG TƯ & BẢO MẬT ──
+    tbl_banner = doc.add_table(rows=1, cols=1)
+    tbl_banner.style = 'Table Grid'
+    tbl_banner.columns[0].width = Cm(18.6)
+    cell_banner = tbl_banner.cell(0, 0)
+    _set_cell_bg(cell_banner, "1B4A7A")
+    p_banner = cell_banner.paragraphs[0]
+    p_banner.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_banner.paragraph_format.space_before = Pt(4)
+    p_banner.paragraph_format.space_after  = Pt(4)
+    _run(p_banner, "✦   THÔNG TIN BẢO MẬT  ·  CONFIDENTIAL   ✦", 7.5, bold=True, color=C_WHITE)
+
     doc.add_paragraph()
 
-    for dong in noi_dung.split("\n"):
-        dong = dong.strip()
-        if not dong:
-            doc.add_paragraph()
+    # ── NỘI DUNG CHÍNH ──
+    dong_list = [d for d in noi_dung.split("\n")]
+    i = 0
+    while i < len(dong_list):
+        dong = dong_list[i].strip()
+        dong_sach = dong.replace("**", "").replace("###", "").replace("##", "").replace("# ", "").strip()
+
+        if not dong_sach:
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(2)
+            i += 1
             continue
-        dong_sach = dong.replace("**", "").replace("###", "").replace("##", "").replace("# ", "")
-        la_tieu_de = bool(dong.isupper() or re.match(r"^\d+[\.\)]\s", dong) or dong.startswith("**"))
-        p = them_doan(dong_sach, size=12, bold=la_tieu_de, align=WD_ALIGN_PARAGRAPH.JUSTIFY)
-        if not la_tieu_de:
-            p.paragraph_format.first_line_indent = Cm(1.0)
 
+        # Phát hiện tiêu đề section (toàn hoa, bắt đầu số, hoặc **text**)
+        la_section = bool(
+            (dong.isupper() and len(dong) > 3) or
+            re.match(r"^\d+[\.\)]\s+[A-ZÁÀẢÃẠ]", dong) or
+            (dong.startswith("**") and dong.endswith("**"))
+        )
+
+        if la_section:
+            # Section header: navy nền, chữ trắng
+            tbl_sec = doc.add_table(rows=1, cols=1)
+            tbl_sec.style = 'Table Grid'
+            tbl_sec.columns[0].width = Cm(18.6)
+            cell_sec = tbl_sec.cell(0, 0)
+            _set_cell_bg(cell_sec, "1B4A7A")
+            p_sec = cell_sec.paragraphs[0]
+            p_sec.paragraph_format.space_before = Pt(5)
+            p_sec.paragraph_format.space_after  = Pt(5)
+            p_sec.paragraph_format.left_indent  = Cm(0.3)
+            _run(p_sec, dong_sach, 9.5, bold=True, color=C_WHITE)
+            doc.add_paragraph().paragraph_format.space_after = Pt(2)
+        else:
+            # Đoạn nội dung thường
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p.paragraph_format.space_after      = Pt(4)
+            p.paragraph_format.left_indent      = Cm(0.5)
+            p.paragraph_format.first_line_indent = Cm(0)
+
+            # Sub-heading nhỏ (bắt đầu bằng •, -, số)
+            la_bullet = bool(re.match(r"^[•\-\*]\s", dong_sach) or re.match(r"^\d+\.\s", dong_sach))
+
+            if la_bullet:
+                p.paragraph_format.left_indent = Cm(1.0)
+                _run(p, dong_sach, 9.5, color=C_DARK)
+            else:
+                _run(p, dong_sach, 9.5, color=C_DARK)
+
+        i += 1
+
+    # ── CHỮ KÝ ──
     doc.add_paragraph()
+    tbl_sign = doc.add_table(rows=1, cols=2)
+    tbl_sign.style = 'Table Grid'
+    tbl_sign.columns[0].width = Cm(9.3)
+    tbl_sign.columns[1].width = Cm(9.3)
+
+    cell_l = tbl_sign.cell(0, 0)
+    cell_r = tbl_sign.cell(0, 1)
+    _set_cell_bg(cell_l, "F8FAFC")
+    _set_cell_bg(cell_r, "F8FAFC")
+
+    p_l = cell_l.paragraphs[0]
+    p_l.paragraph_format.space_before = Pt(8)
+    p_l.paragraph_format.space_after  = Pt(8)
+    p_l.paragraph_format.left_indent  = Cm(0.5)
+    _run(p_l, "Kính trân trọng,\n", 9.5, color=C_MUTED)
+    p_l2 = cell_l.add_paragraph()
+    p_l2.paragraph_format.left_indent = Cm(0.5)
+    _run(p_l2, f"\n\n{ten_ls}", 10, bold=True, color=C_NAVY)
+    p_l3 = cell_l.add_paragraph()
+    p_l3.paragraph_format.left_indent = Cm(0.5)
+    _run(p_l3, chuc_vu, 8.5, color=C_MUTED)
+    p_l4 = cell_l.add_paragraph()
+    p_l4.paragraph_format.left_indent = Cm(0.5)
+    p_l4.paragraph_format.space_after = Pt(8)
+    _run(p_l4, TEN_CONG_TY, 8.5, italic=True, color=C_GOLD)
+
+    p_r = cell_r.paragraphs[0]
+    p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_r.paragraph_format.space_before = Pt(8)
+    p_r.paragraph_format.right_indent = Cm(0.5)
+    _run(p_r, "Hiệu lực văn bản\n", 8, bold=True, color=C_GOLD)
+    p_r2 = cell_r.add_paragraph()
+    p_r2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_r2.paragraph_format.right_indent = Cm(0.5)
+    _run(p_r2, f"TP. Hồ Chí Minh, {datetime.now().strftime('%d/%m/%Y')}", 9.5, bold=True, color=C_NAVY)
+    p_r3 = cell_r.add_paragraph()
+    p_r3.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_r3.paragraph_format.right_indent = Cm(0.5)
+    p_r3.paragraph_format.space_after  = Pt(8)
+    _run(p_r3, "Tài liệu soạn bởi MTL Legal Agent Premium", 7.5, italic=True, color=C_MUTED)
+
+    # ── FOOTER: Gold bar ──
     doc.add_paragraph()
-    them_doan(f"TP. Hồ Chí Minh, {datetime.now().strftime('%d/%m/%Y')}", size=12, italic=True, align=WD_ALIGN_PARAGRAPH.RIGHT)
-    them_doan(f"{chuc_vu}\n\n\n\n{ten_ls}", size=12, bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT)
+    tbl_footer = doc.add_table(rows=1, cols=1)
+    tbl_footer.style = 'Table Grid'
+    tbl_footer.columns[0].width = Cm(18.6)
+    cell_f = tbl_footer.cell(0, 0)
+    _set_cell_bg(cell_f, "B8973A")
+    p_f = cell_f.paragraphs[0]
+    p_f.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_f.paragraph_format.space_before = Pt(3)
+    p_f.paragraph_format.space_after  = Pt(3)
+    _run(p_f, f"© 2026 MINHTU LAW CO., LTD  |  OUR EXPERIENCE IS YOUR SUCCESS  |  {SBT_CT}", 6.5, bold=True, color=C_WHITE)
 
     buf = io.BytesIO()
     doc.save(buf)
