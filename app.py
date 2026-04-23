@@ -255,6 +255,38 @@ section[data-testid="stSidebar"] .stButton > button:hover {{
     background: rgba(168,135,74,0.04) !important;
 }}
 
+/* Fix chữ trắng trong sidebar uploader */
+section[data-testid="stSidebar"] .stFileUploader {{
+    background: transparent !important;
+}}
+section[data-testid="stSidebar"] .stFileUploader > div {{
+    background: rgba(255,255,255,0.06) !important;
+    border: 2px dashed {MTL_GOLD}99 !important;
+    border-radius: 10px !important;
+}}
+section[data-testid="stSidebar"] .stFileUploader label,
+section[data-testid="stSidebar"] .stFileUploader span,
+section[data-testid="stSidebar"] .stFileUploader p,
+section[data-testid="stSidebar"] .stFileUploader small,
+section[data-testid="stSidebar"] .stFileUploader div {{
+    color: #e8eef5 !important;
+}}
+section[data-testid="stSidebar"] .stFileUploader button {{
+    background: {MTL_GOLD} !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+}}
+section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzone"] {{
+    background: rgba(255,255,255,0.05) !important;
+    border: 2px dashed {MTL_GOLD}99 !important;
+    border-radius: 10px !important;
+}}
+section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzone"] * {{
+    color: #C9A96E !important;
+}}
+
 /* ── Download button ── */
 .stDownloadButton > button {{
     background: linear-gradient(135deg, {MTL_GOLD} 0%, #8a6d38 100%) !important;
