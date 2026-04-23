@@ -24,11 +24,10 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import PyPDF2
 
 # =============================================================
-#  API KEY — được cấu hình trong Railway Variables
-#  (Không điền key vào đây, GitHub sẽ tự xóa!)
-#  Hướng dẫn: Railway → tab Variables → thêm ANTHROPIC_API_KEY
+#  API KEY — cấu hình trong Railway Variables
+#  Tên biến trong Railway: ANTHROPIC_API_KEY
 # =============================================================
-ANTHROPIC_API_KEY = ""
+API_KEY_FALLBACK = ""
 # =============================================================
 
 # ─────────────────────────────────────────────
@@ -215,13 +214,13 @@ section[data-testid="stSidebar"] .stFileUploader button {{
 #  XÁC ĐỊNH API KEY
 # ─────────────────────────────────────────────
 def lay_api_key():
-    # Ưu tiên 1: biến môi trường Railway
+    # Đọc thẳng từ env var Railway
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if key:
         return key
-    # Ưu tiên 2: key điền trực tiếp ở đầu file
-    if ANTHROPIC_API_KEY and len(ANTHROPIC_API_KEY) > 20:
-        return ANTHROPIC_API_KEY
+    # Fallback: key dự phòng điền tay
+    if API_KEY_FALLBACK and len(API_KEY_FALLBACK) > 20:
+        return API_KEY_FALLBACK
     return ""
 
 API_KEY = lay_api_key()
@@ -443,6 +442,8 @@ with st.sidebar:
 padding:8px 12px;font-size:0.78rem;color:#90ee90;margin-bottom:12px;">
 ✅ API Key đã được cấu hình
 </div>""", unsafe_allow_html=True)
+        # Debug: hiện 8 ký tự đầu để xác nhận đúng key
+        st.markdown(f"<div style='font-size:0.7rem;color:#888;margin-bottom:8px;'>Key: {API_KEY[:12]}...{API_KEY[-4:]}</div>", unsafe_allow_html=True)
     else:
         st.markdown("""
 <div style="background:rgba(220,80,80,0.15);border:1px solid #c04040;border-radius:8px;
