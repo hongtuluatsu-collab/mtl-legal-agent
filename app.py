@@ -27,7 +27,7 @@ import PyPDF2
 #  ★★★  DÁN API KEY VÀO ĐÂY — CHỈ LÀM 1 LẦN  ★★★
 #  Lấy key tại: https://console.anthropic.com
 # =============================================================
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = "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"
 # =============================================================
 
 # ─────────────────────────────────────────────
