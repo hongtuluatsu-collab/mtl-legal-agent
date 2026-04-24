@@ -329,73 +329,45 @@ if not st.session_state.dang_nhap:
 """, unsafe_allow_html=True)
     st.stop()
 
-# ── Nút thu/mở sidebar ──
-stc.html(f"""
-<script>
-(function(){{
-  var P=window.parent, D=P.document;
-  var LS='mtl8';
+# ── Khởi tạo trạng thái sidebar ──
+if "sb_open" not in st.session_state:
+    st.session_state.sb_open = True
 
-  // Xoá nút và style cũ từ các lần rerun trước
-  ['mtl-t','mtl-s'].forEach(function(id){{
-    var el=D.getElementById(id); if(el) el.remove();
-  }});
-
-  // Tạo style element để ẩn sidebar
-  var styleEl=D.createElement('style');
-  styleEl.id='mtl-s';
-  D.head.appendChild(styleEl);
-
-  // Tạo nút, gắn vào body trang chính
-  var btn=D.createElement('div');
-  btn.id='mtl-t';
-  btn.style.cssText='position:fixed;top:50%;left:0px;transform:translateY(-50%);'
-    +'z-index:2147483647;width:24px;height:62px;background:{MTL_NAVY};'
-    +'border:2px solid {MTL_GOLD};border-left:none;border-radius:0 10px 10px 0;'
-    +'cursor:pointer;display:flex;align-items:center;justify-content:center;'
-    +'box-shadow:3px 0 10px rgba(0,0,0,.3);';
-  btn.innerHTML='<span style="color:{MTL_GOLD};font-size:18px;font-weight:900;'
-    +'pointer-events:none;user-select:none;line-height:1;">&#8249;</span>';
-  D.body.appendChild(btn);
-
-  function sb(){{ return D.querySelector('section[data-testid="stSidebar"]'); }}
-  function hidden(){{ return localStorage.getItem(LS)==='1'; }}
-
-  function apply(){{
-    var h=hidden(), s=sb();
-    // Ẩn hoặc hiện sidebar
-    styleEl.textContent = h
-      ? 'section[data-testid="stSidebar"]{{display:none!important;}}'
-      : '';
-    // Cập nhật icon và vị trí nút
-    btn.querySelector('span').innerHTML = h ? '&#8250;' : '&#8249;';
-    btn.title = h ? 'Mo thanh ben' : 'Thu thanh ben';
-    if(h){{
-      btn.style.left='0px';
-    }}else{{
-      // Đợi sidebar render xong rồi đọc width
-      setTimeout(function(){{
-        var w=s?s.getBoundingClientRect().width:0;
-        btn.style.left=(w>10?w:300)+'px';
-      }},50);
-    }}
-  }}
-
-  btn.onclick=function(){{
-    localStorage.setItem(LS, hidden()?'0':'1');
-    apply();
-  }};
-
-  // Khởi động sau khi sidebar sẵn sàng
-  function init(){{
-    if(!sb()){{setTimeout(init,300);return;}}
-    apply();
-    setInterval(apply,1500);
-  }}
-  setTimeout(init,1000);
-}})();
-</script>
-""", height=0)
+# ── CSS ẩn sidebar khi đóng ──
+if not st.session_state.sb_open:
+    st.markdown(
+        "<style>section[data-testid='stSidebar']{display:none!important;}</style>",
+        unsafe_allow_html=True,
+    )
+    # Nút mở sidebar — hiện ở cạnh trái màn hình
+    st.markdown(f"""
+<style>
+div[data-testid="stVerticalBlock"] div.mtl-open-wrap button {{
+    position: fixed !important;
+    top: 50% !important;
+    left: 0 !important;
+    transform: translateY(-50%) !important;
+    z-index: 999999 !important;
+    width: 26px !important;
+    min-height: 64px !important;
+    padding: 0 !important;
+    background: {MTL_NAVY} !important;
+    color: {MTL_GOLD} !important;
+    border: 2px solid {MTL_GOLD} !important;
+    border-left: none !important;
+    border-radius: 0 10px 10px 0 !important;
+    font-size: 20px !important;
+    font-weight: 900 !important;
+    box-shadow: 3px 0 10px rgba(0,0,0,0.3) !important;
+    line-height: 1 !important;
+}}
+</style>
+<div class="mtl-open-wrap">
+""", unsafe_allow_html=True)
+    if st.button("›", key="btn_open_sb", help="Mở thanh bên"):
+        st.session_state.sb_open = True
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  HÀM ĐỌC FILE
@@ -720,6 +692,27 @@ nd = st.session_state.nguoi_dung
 
 # ── SIDEBAR ──
 with st.sidebar:
+    # ── Nút thu gọn sidebar ──
+    st.markdown(f"""
+<style>
+section[data-testid="stSidebar"] div.mtl-close-wrap button {{
+    background: rgba(168,135,74,0.15) !important;
+    border: 1px solid {MTL_GOLD}55 !important;
+    color: {MTL_GOLD2} !important;
+    border-radius: 6px !important;
+    font-size: 0.8rem !important;
+    font-weight: 600 !important;
+    width: 100% !important;
+    margin-bottom: 8px !important;
+}}
+</style>
+<div class="mtl-close-wrap">
+""", unsafe_allow_html=True)
+    if st.button("◄ Thu gọn thanh bên", key="btn_close_sb"):
+        st.session_state.sb_open = False
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
     st.markdown(f"""
 <div style="text-align:center;padding:16px 0 8px;">
   <div style="display:flex;align-items:center;justify-content:center;gap:3px;margin-bottom:8px;">
