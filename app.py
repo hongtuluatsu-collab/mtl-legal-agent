@@ -117,13 +117,29 @@ st.markdown(f"""
 <style>
 #MainMenu, footer, header {{ visibility: hidden; }}
 
-/* Ẩn nút « để không bao giờ bấm nhầm làm mất sidebar */
+/* ── Xoá khoảng trắng trên cùng — header sát mép màn hình ── */
+.stApp > header {{ display: none !important; }}
+[data-testid="stAppViewContainer"] {{
+    padding-top: 0 !important;
+}}
+[data-testid="stMainBlockContainer"] {{
+    padding-top: 0.5rem !important;
+    max-width: 100% !important;
+}}
+.block-container {{
+    padding-top: 0.5rem !important;
+}}
+
+/* ── Sidebar luôn hiện, không bị ẩn bởi Streamlit state ── */
 [data-testid="stSidebarCollapseButton"],
 [data-testid="collapsedControl"] {{
     display: none !important;
 }}
-
 section[data-testid="stSidebar"] {{
+    display: flex !important;
+    transform: translateX(0) !important;
+    visibility: visible !important;
+    opacity: 1 !important;
     background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%) !important;
     border-right: 2px solid {MTL_GOLD} !important;
 }}
