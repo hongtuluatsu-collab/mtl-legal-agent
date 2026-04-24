@@ -905,6 +905,8 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
     _SCOPES = [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
     ]
     _cred_key = f"gcred_{nd['ten_tk']}"
 
@@ -1691,6 +1693,113 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
 
 
 # ══════════════════════════════════════════════════════════════
+#  GOOGLE CALENDAR HELPERS
+# ══════════════════════════════════════════════════════════════
+
+def _gcal_service():
+    """Trả về Google Calendar service của người dùng hiện tại."""
+    creds = st.session_state.get(f"gcred_{nd['ten_tk']}")
+    if not creds or not creds.valid:
+        return None
+    try:
+        from googleapiclient.discovery import build as _build
+        return _build("calendar", "v3", credentials=creds)
+    except Exception:
+        return None
+
+def lay_su_kien_gcal(week_start: datetime, week_end: datetime) -> list:
+    """
+    Tải sự kiện Google Calendar của tuần được chọn.
+    Trả về list dict: {title, date_str, time_str, color, all_day, calendar_name}
+    """
+    svc = _gcal_service()
+    if not svc:
+        return []
+    try:
+        time_min = week_start.isoformat() + "Z"
+        time_max = (week_end + timedelta(days=1)).isoformat() + "Z"
+        # Lấy danh sách calendars của user (tối đa 10)
+        cal_list = svc.calendarList().list(maxResults=10).execute()
+        calendars = cal_list.get("items", [])
+
+        all_events = []
+        cal_colors = {
+            0: "#1E4D82", 1: "#A8874A", 2: "#0f6e56", 3: "#7B3F8C",
+            4: "#B94040", 5: "#3A6EA5", 6: "#E06C1A", 7: "#2E8B57",
+            8: "#8B4513", 9: "#4682B4",
+        }
+        for idx, cal in enumerate(calendars):
+            cal_id    = cal["id"]
+            cal_name  = cal.get("summary", cal_id)
+            bg_color  = cal.get("backgroundColor", cal_colors.get(idx % 10, "#1E4D82"))
+            try:
+                events_result = svc.events().list(
+                    calendarId   = cal_id,
+                    timeMin      = time_min,
+                    timeMax      = time_max,
+                    singleEvents = True,
+                    orderBy      = "startTime",
+                    maxResults   = 50,
+                ).execute()
+                for ev in events_result.get("items", []):
+                    start = ev.get("start", {})
+                    end_  = ev.get("end",   {})
+                    all_day   = "date"     in start and "dateTime" not in start
+                    date_raw  = start.get("dateTime", start.get("date", ""))
+                    date_str  = date_raw[:10]
+                    time_str  = ""
+                    if not all_day and "dateTime" in start:
+                        try:
+                            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00"))
+                            te = datetime.fromisoformat(end_.get("dateTime", start["dateTime"]).replace("Z", "+00:00"))
+                            time_str = dt.strftime("%H:%M") + "–" + te.strftime("%H:%M")
+                        except Exception:
+                            time_str = date_raw[11:16]
+                    all_events.append({
+                        "id":            ev.get("id", ""),
+                        "title":         ev.get("summary", "(Không có tiêu đề)"),
+                        "date_str":      date_str,
+                        "time_str":      time_str,
+                        "all_day":       all_day,
+                        "color":         bg_color,
+                        "calendar_name": cal_name,
+                        "location":      ev.get("location", ""),
+                        "description":   ev.get("description", ""),
+                        "status":        ev.get("status", "confirmed"),
+                    })
+            except Exception:
+                continue
+        # Sắp xếp: all-day trước, sau đó theo giờ
+        all_events.sort(key=lambda e: (e["date_str"], not e["all_day"], e["time_str"]))
+        return all_events
+    except Exception as e:
+        return []
+
+def them_task_vao_gcal(task: dict) -> str | None:
+    """Tạo sự kiện Google Calendar từ MTL task. Trả về event ID hoặc None."""
+    svc = _gcal_service()
+    if not svc:
+        return None
+    try:
+        date_str = task.get("date", datetime.now().strftime("%Y-%m-%d"))
+        event = {
+            "summary":     task["title"],
+            "description": task.get("desc", "") + (
+                f"\n\nPhụ trách: {ten_nv(task.get('assignee',''))}"
+                f"\nƯu tiên: {'Cao' if task.get('priority')=='high' else 'Trung bình' if task.get('priority')=='medium' else 'Thấp'}"
+                f"\n[MTL Task ID: {task.get('id','')}]"
+            ),
+            "start": {"date": date_str},
+            "end":   {"date": date_str},
+            "colorId": "9" if task.get("priority") == "high" else "1",
+        }
+        result = svc.events().insert(calendarId="primary", body=event).execute()
+        return result.get("id")
+    except Exception:
+        return None
+
+
+# ══════════════════════════════════════════════════════════════
 #  TAB 6 — QUẢN LÝ CÔNG VIỆC (Task Management)
 #  • Danh sách task (CRUD) + đánh dấu hoàn thành
 #  • Lịch công việc theo tuần
@@ -2371,40 +2480,104 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
                 )
 
     # ════════════════════════════════════════════
-    #  STAB 1 — LỊCH CÔNG VIỆC
+    #  STAB 1 — LỊCH CÔNG VIỆC (đồng bộ Google Calendar)
     # ════════════════════════════════════════════
     with stabs[1]:
         now = datetime.now()
         if "mtl_cal_offset" not in st.session_state:
             st.session_state.mtl_cal_offset = 0
-
-        # Điều hướng tuần
-        nav1, nav2, nav3, nav4 = st.columns([1, 2, 1, 4])
-        with nav1:
-            if st.button("‹ Tuần trước", use_container_width=True, key="cal_prev"):
-                st.session_state.mtl_cal_offset -= 1
-                st.rerun()
-        with nav3:
-            if st.button("Tuần sau ›", use_container_width=True, key="cal_next"):
-                st.session_state.mtl_cal_offset += 1
-                st.rerun()
-        with nav2:
-            if st.button("Hôm nay", use_container_width=True, key="cal_today"):
-                st.session_state.mtl_cal_offset = 0
-                st.rerun()
+        if "mtl_gcal_events" not in st.session_state:
+            st.session_state.mtl_gcal_events = []
+        if "mtl_gcal_synced_week" not in st.session_state:
+            st.session_state.mtl_gcal_synced_week = ""
 
         offset     = st.session_state.mtl_cal_offset
         week_start = now - timedelta(days=now.weekday()) + timedelta(weeks=offset)
         week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_end   = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        week_label = (
+            f"{week_start.strftime('%d/%m')} — "
+            f"{week_end.strftime('%d/%m/%Y')}"
+        )
+        week_key = week_start.strftime("%G-W%V")
+
+        # ── Thanh điều khiển ──
+        ctl1, ctl2, ctl3, ctl4, ctl5 = st.columns([1, 1.2, 1, 1.8, 2])
+        with ctl1:
+            if st.button("‹ Trước", use_container_width=True, key="cal_prev"):
+                st.session_state.mtl_cal_offset -= 1
+                st.rerun()
+        with ctl3:
+            if st.button("Sau ›", use_container_width=True, key="cal_next"):
+                st.session_state.mtl_cal_offset += 1
+                st.rerun()
+        with ctl2:
+            if st.button("Hôm nay", use_container_width=True, key="cal_today"):
+                st.session_state.mtl_cal_offset = 0
+                st.rerun()
+        with ctl4:
+            gcal_svc_ok = _gcal_service() is not None
+            sync_label  = "🔄 Đồng bộ GCal" if gcal_svc_ok else "⚠️ Chưa kết nối"
+            if st.button(sync_label, use_container_width=True, key="cal_sync",
+                         disabled=not gcal_svc_ok,
+                         type="primary" if gcal_svc_ok else "secondary"):
+                with st.spinner("Đang tải sự kiện từ Google Calendar..."):
+                    fetched = lay_su_kien_gcal(week_start, week_end)
+                st.session_state.mtl_gcal_events    = fetched
+                st.session_state.mtl_gcal_synced_week = week_key
+                st.rerun()
+        with ctl5:
+            # Hiển thị trạng thái đồng bộ
+            if not gcal_svc_ok:
+                st.markdown(
+                    "<span style='font-size:0.75rem;color:#e07040;'>"
+                    "Đăng nhập Google ở thanh bên để đồng bộ lịch</span>",
+                    unsafe_allow_html=True,
+                )
+            elif st.session_state.mtl_gcal_synced_week == week_key:
+                n_ev = len(st.session_state.mtl_gcal_events)
+                st.markdown(
+                    f"<span style='font-size:0.75rem;color:#0f6e56;'>"
+                    f"✅ Đã đồng bộ · {n_ev} sự kiện</span>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    "<span style='font-size:0.75rem;color:#888;'>"
+                    "Nhấn 🔄 để tải sự kiện tuần này</span>",
+                    unsafe_allow_html=True,
+                )
 
         st.markdown(
-            f"<div style='text-align:center;font-weight:700;color:{MTL_NAVY};margin-bottom:12px;'>"
-            f"📅 Tuần {week_start.strftime('%d/%m')} — "
-            f"{(week_start + timedelta(days=6)).strftime('%d/%m/%Y')}</div>",
+            f"<div style='text-align:center;font-weight:700;color:{MTL_NAVY};"
+            f"margin:10px 0 4px;font-size:1rem;'>📅 Tuần {week_label}</div>",
             unsafe_allow_html=True,
         )
 
-        # Build calendar HTML
+        # Legend
+        gcal_events_this_week = (
+            st.session_state.mtl_gcal_events
+            if st.session_state.mtl_gcal_synced_week == week_key
+            else []
+        )
+        legend_html = (
+            "<div style='display:flex;gap:16px;flex-wrap:wrap;font-size:11px;"
+            f"color:#666;margin-bottom:10px;padding:6px 10px;"
+            f"background:#f8f9fc;border-radius:6px;border:1px solid #e0e8f5;'>"
+            f"<span><span style='display:inline-block;width:10px;height:10px;"
+            f"background:{MTL_NAVY};border-radius:2px;margin-right:4px;'></span>"
+            f"Task MTL (chưa xong)</span>"
+            f"<span><span style='display:inline-block;width:10px;height:10px;"
+            f"background:#0f6e56;border-radius:2px;margin-right:4px;'></span>"
+            f"Task MTL (đã xong)</span>"
+            f"<span><span style='display:inline-block;width:10px;height:10px;"
+            f"background:#A8874A;border-radius:2px;margin-right:4px;'></span>"
+            f"Sự kiện Google Calendar</span>"
+            f"</div>"
+        )
+        st.markdown(legend_html, unsafe_allow_html=True)
+
+        # ── Build calendar grid ──
         day_names = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
         cal_html  = "<div style='display:grid;grid-template-columns:repeat(7,1fr);gap:6px;'>"
 
@@ -2412,50 +2585,167 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
             day      = week_start + timedelta(days=i)
             day_str  = day.strftime("%Y-%m-%d")
             is_today = (day.date() == now.date())
-            day_tasks = [t for t in st.session_state.mtl_tasks if t.get("date") == day_str]
 
-            # Nếu không phải admin, chỉ hiển thị task của mình
+            # MTL tasks
+            day_tasks = [t for t in st.session_state.mtl_tasks if t.get("date") == day_str]
             if not is_admin:
                 day_tasks = [t for t in day_tasks if t.get("assignee") == nd["ten_tk"]]
 
+            # GCal events
+            day_gcal = [e for e in gcal_events_this_week if e["date_str"] == day_str]
+
             hdr_bg  = MTL_NAVY if is_today else "#f8f9fc"
             hdr_clr = "white"  if is_today else MTL_NAVY
+            border_style = "2px solid " + MTL_NAVY if is_today else "1px solid #e0e8f5"
 
-            task_html = ""
+            cell_items = ""
+
+            # Hiển thị GCal all-day events trước
+            for ev in [e for e in day_gcal if e["all_day"]]:
+                ev_color = ev.get("color", MTL_GOLD)
+                cal_nm   = ev["calendar_name"][:12]
+                cell_items += (
+                    "<div style='background:" + ev_color + "22;color:" + ev_color + ";"
+                    "border:1px solid " + ev_color + "66;"
+                    "border-radius:4px;padding:3px 5px;font-size:10px;"
+                    "margin-bottom:3px;white-space:nowrap;overflow:hidden;"
+                    "text-overflow:ellipsis;'"
+                    " title='[" + cal_nm + "] " + ev['title'] + " (Cả ngày)'>"
+                    "📆 " + ev["title"] + "</div>"
+                )
+
+            # GCal timed events
+            for ev in [e for e in day_gcal if not e["all_day"]]:
+                ev_color = ev.get("color", MTL_GOLD)
+                time_lbl = ev["time_str"] if ev["time_str"] else ""
+                cal_nm   = ev["calendar_name"][:10]
+                cell_items += (
+                    "<div style='background:" + ev_color + "18;color:" + ev_color + ";"
+                    "border-left:3px solid " + ev_color + ";"
+                    "border-radius:0 4px 4px 0;padding:3px 5px;font-size:10px;"
+                    "margin-bottom:3px;white-space:nowrap;overflow:hidden;"
+                    "text-overflow:ellipsis;'"
+                    " title='[" + cal_nm + "] " + ev['title'] + " " + time_lbl + "'>"
+                    + (time_lbl + " " if time_lbl else "") + ev["title"] + "</div>"
+                )
+
+            # MTL tasks
             for t in day_tasks:
-                bg_t   = "#0f6e56" if t.get("done") else MTL_NAVY
-                txt_t  = "#9fe1cb" if t.get("done") else MTL_GOLD2
-                strike = "text-decoration:line-through;" if t.get("done") else ""
+                bg_t    = "#0f6e56" if t.get("done") else MTL_NAVY
+                txt_t   = "#9fe1cb" if t.get("done") else MTL_GOLD2
+                strike  = "text-decoration:line-through;" if t.get("done") else ""
                 t_title  = t["title"]
                 t_assign = ten_nv(t.get("assignee", ""))
-                task_html += (
-                    "<div style='background:" + bg_t + ";color:" + txt_t + ";border-radius:4px;"
-                    "padding:3px 5px;font-size:10px;margin-bottom:3px;" + strike +
+                cell_items += (
+                    "<div style='background:" + bg_t + ";color:" + txt_t + ";"
+                    "border-radius:4px;padding:3px 5px;font-size:10px;"
+                    "margin-bottom:3px;" + strike +
                     "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'"
-                    " title='" + t_title + " - " + t_assign + "'>"
+                    " title='[MTL] " + t_title + " - " + t_assign + "'>"
                     + t_title + "</div>"
                 )
 
-            border_style = "2px solid " + MTL_NAVY if is_today else "1px solid #e0e8f5"
+            if not cell_items:
+                cell_items = "<span style='color:#ccc;font-size:10px;'>Trống</span>"
+
             cal_html += (
                 "<div style='border:" + border_style + ";"
-                f"border-radius:8px;overflow:hidden;min-height:120px;'>"
-                f"<div style='background:{hdr_bg};color:{hdr_clr};font-size:11px;"
-                f"font-weight:600;padding:5px 7px;text-align:center;'>"
-                f"{day_names[i]}<br>{day.strftime('%d/%m')}</div>"
-                f"<div style='padding:6px;background:white;min-height:90px;'>"
-                f"{task_html if task_html else '<span style=\"color:#ccc;font-size:10px;\">Trống</span>'}"
-                f"</div></div>"
+                "border-radius:8px;overflow:hidden;min-height:130px;'>"
+                "<div style='background:" + hdr_bg + ";color:" + hdr_clr + ";"
+                "font-size:11px;font-weight:600;padding:5px 7px;text-align:center;'>"
+                + day_names[i] + "<br>" + day.strftime('%d/%m') + "</div>"
+                "<div style='padding:6px;background:white;min-height:100px;'>"
+                + cell_items +
+                "</div></div>"
             )
 
         cal_html += "</div>"
         st.markdown(cal_html, unsafe_allow_html=True)
 
-        st.markdown(
-            "<div style='margin-top:10px;font-size:11px;color:#999;'>"
-            "🟦 Task chưa xong &nbsp;|&nbsp; 🟩 Đã hoàn thành</div>",
-            unsafe_allow_html=True,
-        )
+        # ── Chi tiết sự kiện GCal khi có dữ liệu ──
+        if gcal_events_this_week:
+            with st.expander(
+                f"📋 Chi tiết {len(gcal_events_this_week)} sự kiện Google Calendar tuần này",
+                expanded=False,
+            ):
+                # Nhóm theo calendar
+                by_cal: dict = {}
+                for ev in gcal_events_this_week:
+                    cn = ev["calendar_name"]
+                    by_cal.setdefault(cn, []).append(ev)
+
+                for cal_name, evs in by_cal.items():
+                    st.markdown(
+                        f"<div style='font-weight:600;font-size:0.82rem;color:{MTL_NAVY};"
+                        f"margin:8px 0 4px;border-left:3px solid {MTL_GOLD};"
+                        f"padding-left:8px;'>📅 {cal_name} ({len(evs)})</div>",
+                        unsafe_allow_html=True,
+                    )
+                    for ev in evs:
+                        ev_color  = ev.get("color", MTL_GOLD)
+                        time_disp = "Cả ngày" if ev["all_day"] else ev.get("time_str", "")
+                        loc_disp  = f" · 📍 {ev['location']}" if ev.get("location") else ""
+                        st.markdown(
+                            f"<div style='display:flex;align-items:flex-start;gap:8px;"
+                            f"padding:6px 8px;margin-bottom:4px;background:#f8f9fc;"
+                            f"border-radius:6px;border-left:3px solid {ev_color};'>"
+                            f"<div style='min-width:55px;font-size:0.72rem;color:{ev_color};"
+                            f"font-weight:600;margin-top:1px;'>{time_disp}</div>"
+                            f"<div>"
+                            f"<div style='font-size:0.83rem;font-weight:600;color:{MTL_NAVY};'>"
+                            f"{ev['title']}</div>"
+                            f"<div style='font-size:0.72rem;color:#888;margin-top:2px;'>"
+                            f"📅 {ev['date_str']}{loc_disp}</div>"
+                            + (f"<div style='font-size:0.72rem;color:#666;margin-top:2px;"
+                               f"font-style:italic;'>{ev['description'][:100]}...</div>"
+                               if ev.get("description") and len(ev.get("description","")) > 10 else "")
+                            + f"</div></div>",
+                            unsafe_allow_html=True,
+                        )
+
+        # ── Thêm task mới nhanh từ lịch ──
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("➕ Thêm task nhanh vào ngày", expanded=False):
+            qc1, qc2, qc3 = st.columns([2, 1, 1])
+            with qc1:
+                q_title = st.text_input("Tiêu đề task", key="quick_task_title",
+                                        placeholder="Nhập tiêu đề nhanh...")
+            with qc2:
+                q_date  = st.date_input("Ngày", key="quick_task_date",
+                                        value=now.date())
+            with qc3:
+                q_sync  = st.checkbox("Thêm vào GCal", key="quick_sync_gcal",
+                                      value=gcal_svc_ok)
+            if st.button("✅ Thêm task", key="quick_add_task", type="primary"):
+                if q_title.strip():
+                    new_qt = {
+                        "id":         task_gen_id(),
+                        "title":      q_title.strip(),
+                        "desc":       "",
+                        "assignee":   nd["ten_tk"],
+                        "priority":   "medium",
+                        "date":       q_date.strftime("%Y-%m-%d"),
+                        "time":       "",
+                        "notes":      "",
+                        "done":       False,
+                        "created_at": datetime.now().isoformat(),
+                        "updated_at": datetime.now().isoformat(),
+                        "completed_at": None,
+                        "cal_added":  False,
+                    }
+                    st.session_state.mtl_tasks.insert(0, new_qt)
+                    if q_sync and gcal_svc_ok:
+                        ev_id = them_task_vao_gcal(new_qt)
+                        if ev_id:
+                            new_qt["cal_added"] = True
+                            st.success(f"✅ Đã thêm task và tạo sự kiện GCal!")
+                        else:
+                            st.warning("Task đã thêm nhưng không tạo được sự kiện GCal.")
+                    else:
+                        st.success("✅ Đã thêm task!")
+                    st.rerun()
+                else:
+                    st.warning("Nhập tiêu đề task trước!")
 
     # ════════════════════════════════════════════
     #  STAB 2 — HIỆU SUẤT (chỉ admin)
