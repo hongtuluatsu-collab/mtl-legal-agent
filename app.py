@@ -30,6 +30,7 @@ from docx import Document
 from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import PyPDF2
+from calendar import monthrange
 
 # =============================================================
 #  API KEY — cấu hình trong Railway Variables
@@ -215,7 +216,144 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     color: white !important; border: none !important;
     border-radius: 8px !important; font-weight: 600 !important;
 }}
+
+/* ── Sidebar toggle button ── */
+#mtl-sidebar-toggle {{
+    position: fixed;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    z-index: 9999;
+    width: 18px;
+    height: 64px;
+    background: {MTL_NAVY};
+    border: 1.5px solid {MTL_GOLD};
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 2px 0 10px rgba(30,77,130,0.25);
+    transition: width 0.2s, background 0.2s;
+}}
+#mtl-sidebar-toggle:hover {{
+    width: 24px;
+    background: {MTL_GOLD};
+}}
+#mtl-sidebar-toggle .mtl-arrow {{
+    color: {MTL_GOLD};
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    user-select: none;
+    transition: color 0.2s;
+    pointer-events: none;
+}}
+#mtl-sidebar-toggle:hover .mtl-arrow {{
+    color: white;
+}}
+
+/* Trạng thái sidebar thu nhỏ */
+body.sidebar-collapsed section[data-testid="stSidebar"] {{
+    width: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden;
+    opacity: 0;
+    transition: all 0.3s ease;
+}}
+body.sidebar-collapsed section[data-testid="stSidebar"] + div,
+body.sidebar-collapsed .main {{
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+}}
+section[data-testid="stSidebar"] {{
+    transition: all 0.3s ease;
+}}
 </style>
+""", unsafe_allow_html=True)
+
+# ── Inject toggle button + JS (chạy 1 lần sau khi CSS load) ──
+st.markdown(f"""
+<div id="mtl-sidebar-toggle" onclick="mtlToggleSidebar()" title="Thu/mở thanh bên">
+  <span class="mtl-arrow" id="mtl-arrow-icon">&#8249;</span>
+</div>
+
+<script>
+(function() {{
+  // Khôi phục trạng thái từ localStorage
+  var collapsed = localStorage.getItem('mtl_sidebar_collapsed') === '1';
+  if (collapsed) {{
+    document.body.classList.add('sidebar-collapsed');
+    var icon = document.getElementById('mtl-arrow-icon');
+    if (icon) icon.innerHTML = '&#8250;';
+    // Dịch nút sang trái khi sidebar thu
+    var btn = document.getElementById('mtl-sidebar-toggle');
+    if (btn) btn.style.left = '0';
+  }}
+}})();
+
+window.mtlToggleSidebar = function() {{
+  var body     = document.body;
+  var btn      = document.getElementById('mtl-sidebar-toggle');
+  var icon     = document.getElementById('mtl-arrow-icon');
+  var sidebar  = document.querySelector('section[data-testid="stSidebar"]');
+  var collapsed = body.classList.toggle('sidebar-collapsed');
+
+  if (collapsed) {{
+    // Thu nhỏ
+    icon.innerHTML = '&#8250;';
+    btn.style.left = '0px';
+    if (sidebar) {{
+      sidebar.style.width = '0';
+      sidebar.style.minWidth = '0';
+      sidebar.style.overflow = 'hidden';
+      sidebar.style.visibility = 'hidden';
+      sidebar.style.opacity = '0';
+    }}
+    localStorage.setItem('mtl_sidebar_collapsed', '1');
+  }} else {{
+    // Mở rộng
+    icon.innerHTML = '&#8249;';
+    if (sidebar) {{
+      sidebar.style.width = '';
+      sidebar.style.minWidth = '';
+      sidebar.style.overflow = '';
+      sidebar.style.visibility = '';
+      sidebar.style.opacity = '';
+      // Lấy lại vị trí nút sau khi sidebar hiện
+      setTimeout(function() {{
+        var sw = sidebar.offsetWidth || 300;
+        btn.style.left = sw + 'px';
+      }}, 320);
+    }}
+    localStorage.setItem('mtl_sidebar_collapsed', '0');
+  }}
+}};
+
+// Gắn vị trí nút theo chiều rộng sidebar thực tế
+(function positionBtn() {{
+  var sidebar = document.querySelector('section[data-testid="stSidebar"]');
+  var btn     = document.getElementById('mtl-sidebar-toggle');
+  if (!sidebar || !btn) {{ setTimeout(positionBtn, 200); return; }}
+
+  var collapsed = localStorage.getItem('mtl_sidebar_collapsed') === '1';
+  if (!collapsed) {{
+    var sw = sidebar.offsetWidth || 300;
+    btn.style.left = sw + 'px';
+  }}
+
+  // Theo dõi resize sidebar (Streamlit thay đổi layout)
+  var ro = new ResizeObserver(function(entries) {{
+    if (!document.body.classList.contains('sidebar-collapsed')) {{
+      var sw = entries[0].contentRect.width;
+      if (sw > 0) btn.style.left = sw + 'px';
+    }}
+  }});
+  ro.observe(sidebar);
+}})();
+</script>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
@@ -282,6 +420,41 @@ if not st.session_state.dang_nhap:
                 st.error("❌ Sai tên đăng nhập hoặc mật khẩu.")
 
         st.markdown("<p style='text-align:center;color:#bbb;font-size:0.75rem;margin-top:16px;'>© 2026 Công ty Luật TNHH Minh Tú</p>", unsafe_allow_html=True)
+        st.markdown(f"""
+<div style="margin-top:18px;padding-top:16px;border-top:1px solid #f0e8d8;">
+  <p style="text-align:center;font-size:0.7rem;color:{MTL_GOLD};font-weight:700;
+  letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;">Giá trị cốt lõi</p>
+  <div style="display:flex;justify-content:center;gap:8px;">
+    <div style="flex:1;text-align:center;padding:10px 6px;
+    background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
+    border-radius:10px;border:1px solid {MTL_GOLD}55;">
+      <div style="font-size:1.3rem;margin-bottom:4px;">🤝</div>
+      <div style="font-size:0.68rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1px;text-transform:uppercase;">Cam kết</div>
+      <div style="font-size:0.6rem;color:rgba(255,255,255,0.55);margin-top:3px;
+      line-height:1.4;">Tận tâm phục vụ<br>đến cùng</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:10px 6px;
+    background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
+    border-radius:10px;border:1px solid {MTL_GOLD}55;">
+      <div style="font-size:1.3rem;margin-bottom:4px;">⚖️</div>
+      <div style="font-size:0.68rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1px;text-transform:uppercase;">Chính trực</div>
+      <div style="font-size:0.6rem;color:rgba(255,255,255,0.55);margin-top:3px;
+      line-height:1.4;">Minh bạch &<br>đạo đức nghề nghiệp</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:10px 6px;
+    background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
+    border-radius:10px;border:1px solid {MTL_GOLD}55;">
+      <div style="font-size:1.3rem;margin-bottom:4px;">📚</div>
+      <div style="font-size:0.68rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1px;text-transform:uppercase;">Học hỏi</div>
+      <div style="font-size:0.6rem;color:rgba(255,255,255,0.55);margin-top:3px;
+      line-height:1.4;">Không ngừng<br>trau dồi kiến thức</div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
     st.stop()
 
 # ─────────────────────────────────────────────
@@ -675,6 +848,41 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                 st.markdown(f"<div style='font-size:0.8rem;padding:2px 0;'>{icon} {item['ten']}</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:12px 0;'></div>", unsafe_allow_html=True)
+
+    # ── Giá trị cốt lõi ở sidebar ──
+    st.markdown(f"""
+<div style="margin-bottom:12px;">
+  <div style="font-size:0.62rem;color:{MTL_GOLD};letter-spacing:2px;font-weight:700;
+  text-transform:uppercase;text-align:center;margin-bottom:8px;">Giá trị cốt lõi</div>
+  <div style="display:flex;flex-direction:column;gap:5px;">
+    <div style="display:flex;align-items:center;gap:8px;background:rgba(168,135,74,0.1);
+    border-left:2px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:6px 10px;">
+      <span style="font-size:0.9rem;">🤝</span>
+      <div>
+        <div style="font-size:0.7rem;font-weight:700;color:{MTL_GOLD};letter-spacing:0.5px;">CAM KẾT</div>
+        <div style="font-size:0.62rem;color:rgba(232,238,245,0.5);margin-top:1px;">Tận tâm phục vụ đến cùng</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;background:rgba(168,135,74,0.1);
+    border-left:2px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:6px 10px;">
+      <span style="font-size:0.9rem;">⚖️</span>
+      <div>
+        <div style="font-size:0.7rem;font-weight:700;color:{MTL_GOLD};letter-spacing:0.5px;">CHÍNH TRỰC</div>
+        <div style="font-size:0.62rem;color:rgba(232,238,245,0.5);margin-top:1px;">Minh bạch & đạo đức nghề nghiệp</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;background:rgba(168,135,74,0.1);
+    border-left:2px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:6px 10px;">
+      <span style="font-size:0.9rem;">📚</span>
+      <div>
+        <div style="font-size:0.7rem;font-weight:700;color:{MTL_GOLD};letter-spacing:0.5px;">HỌC HỎI</div>
+        <div style="font-size:0.62rem;color:rgba(232,238,245,0.5);margin-top:1px;">Không ngừng trau dồi kiến thức</div>
+      </div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
     if st.button("🚪 Đăng xuất", use_container_width=True):
         dang_xuat()
 
@@ -830,15 +1038,55 @@ st.markdown(f"""
     </div>
   </div>
 </div>
+
+<!-- Thanh giá trị cốt lõi -->
+<div style="background:linear-gradient(90deg,{MTL_NAVY2} 0%,#122d50 100%);
+border-bottom:2px solid {MTL_GOLD}44;
+padding:7px 28px;margin-top:-4px;margin-bottom:8px;
+display:flex;align-items:center;justify-content:center;gap:0;">
+
+  <div style="display:flex;align-items:center;gap:8px;padding:0 24px;
+  border-right:1px solid {MTL_GOLD}40;">
+    <span style="font-size:1rem;">🤝</span>
+    <div>
+      <div style="font-size:0.7rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;line-height:1;">Cam kết</div>
+      <div style="font-size:0.6rem;color:rgba(201,169,110,0.6);margin-top:1px;">Tận tâm phục vụ đến cùng</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:8px;padding:0 24px;
+  border-right:1px solid {MTL_GOLD}40;">
+    <span style="font-size:1rem;">⚖️</span>
+    <div>
+      <div style="font-size:0.7rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;line-height:1;">Chính trực</div>
+      <div style="font-size:0.6rem;color:rgba(201,169,110,0.6);margin-top:1px;">Minh bạch & đạo đức nghề nghiệp</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:8px;padding:0 24px;">
+    <span style="font-size:1rem;">📚</span>
+    <div>
+      <div style="font-size:0.7rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;line-height:1;">Học hỏi</div>
+      <div style="font-size:0.6rem;color:rgba(201,169,110,0.6);margin-top:1px;">Không ngừng trau dồi kiến thức</div>
+    </div>
+  </div>
+
+  <div style="margin-left:auto;font-size:0.6rem;color:rgba(201,169,110,0.4);
+  font-style:italic;white-space:nowrap;">OUR EXPERIENCE IS YOUR SUCCESS</div>
+</div>
 """, unsafe_allow_html=True)
 
 # ── TABS ──
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🔍 Phân tích hồ sơ",
     "📝 Soạn thảo văn bản",
     "💬 Hỏi đáp pháp lý",
     "📋 Hướng dẫn sử dụng",
     "📧 Email Intelligence",
+    "📌 Quản lý Công việc",
 ])
 
 # ══════════════════════════════════════════════
@@ -1440,3 +1688,1150 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                         with st.expander(f"✅ {item['time']} → {item['to']}"):
                             st.markdown(f"**{item['subject']}**")
                             st.text(item["body"][:300] + ("…" if len(item["body"])>300 else ""))
+
+
+# ══════════════════════════════════════════════════════════════
+#  TAB 6 — QUẢN LÝ CÔNG VIỆC (Task Management)
+#  • Danh sách task (CRUD) + đánh dấu hoàn thành
+#  • Lịch công việc theo tuần
+#  • Hiệu suất nhân viên: tuần / tháng / năm  (chỉ admin)
+#  • Báo cáo tuần tự động — gửi Gmail Thứ 5 20:00
+# ══════════════════════════════════════════════════════════════
+
+# ── Session-state khởi tạo (prefix mtl_task_ tránh xung đột) ──
+# ── 5 Task cứng bắt buộc mỗi tuần ──────────────────────────────
+MANDATORY_TASKS = [
+    {
+        "idx": 0,
+        "title": "Power of One: Gặp 1 cộng tác viên",
+        "icon": "🤝",
+        "desc": "Gặp gỡ, kết nối với ít nhất 1 cộng tác viên trong tuần.",
+        "priority": "high",
+    },
+    {
+        "idx": 1,
+        "title": "Gặp 1 khách hàng cũ",
+        "icon": "👤",
+        "desc": "Thăm hỏi, chăm sóc hoặc trao đổi công việc với 1 khách hàng đã hợp tác.",
+        "priority": "high",
+    },
+    {
+        "idx": 2,
+        "title": "Gặp 1 khách hàng mới",
+        "icon": "🌟",
+        "desc": "Tiếp cận, tư vấn hoặc gặp mặt 1 khách hàng tiềm năng mới.",
+        "priority": "high",
+    },
+    {
+        "idx": 3,
+        "title": "Ký 01 hợp đồng / Thực hiện 1 dự án mới",
+        "icon": "✍️",
+        "desc": "Ký kết hợp đồng dịch vụ pháp lý hoặc khởi động 1 dự án mới trong tuần.",
+        "priority": "high",
+    },
+    {
+        "idx": 4,
+        "title": "Học tập 01 giờ",
+        "icon": "📚",
+        "desc": "Dành ít nhất 1 giờ học tập: nghiên cứu luật, đọc tài liệu chuyên môn, tham gia webinar...",
+        "priority": "medium",
+    },
+]
+
+_task_defaults = {
+    "mtl_tasks":          [],   # Danh sách task thường
+    "mtl_task_edit_id":   None, # ID task đang sửa
+    "mtl_rpt_text":       "",   # Nội dung báo cáo AI mới nhất
+    "mtl_last_sent_week": "",   # Tuần đã gửi báo cáo (vd: "2026-W17")
+    "mtl_perf_period":    "week",
+    "mtl_mandatory_done": {},   # {"{week}_{user_id}_{idx}": True/False}
+    "mtl_mandatory_notes":{},   # {"{week}_{user_id}_{idx}": "ghi chú"}
+}
+for _k, _v in _task_defaults.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+def mkey(week, user_id, idx):
+    """Khóa lưu trạng thái task cứng."""
+    return f"{week}__{user_id}__{idx}"
+
+def is_mandatory_done(week, user_id, idx):
+    return st.session_state.mtl_mandatory_done.get(mkey(week, user_id, idx), False)
+
+def set_mandatory_done(week, user_id, idx, val):
+    st.session_state.mtl_mandatory_done[mkey(week, user_id, idx)] = val
+
+def get_mandatory_note(week, user_id, idx):
+    return st.session_state.mtl_mandatory_notes.get(mkey(week, user_id, idx), "")
+
+def set_mandatory_note(week, user_id, idx, note):
+    st.session_state.mtl_mandatory_notes[mkey(week, user_id, idx)] = note
+
+# ─── Danh sách thành viên lấy từ TAI_KHOAN ───────────────────
+def lay_thanh_vien():
+    return [
+        {"id": tk, "ho_ten": info["ho_ten"], "chuc_vu": info["chuc_vu"]}
+        for tk, info in TAI_KHOAN.items()
+    ]
+
+THANH_VIEN = lay_thanh_vien()
+
+def ten_nv(user_id):
+    for m in THANH_VIEN:
+        if m["id"] == user_id:
+            return m["ho_ten"]
+    return "Chưa phân công"
+
+# ─── Helpers task ─────────────────────────────────────────────
+def task_gen_id():
+    return f"T{datetime.now().strftime('%Y%m%d%H%M%S%f')[-10:]}"
+
+def tasks_of_week(week_str):
+    """Lọc task theo tuần ISO (vd: '2026-W17')."""
+    try:
+        yr, wn = week_str.split("-W")
+        yr, wn = int(yr), int(wn)
+        jan4   = datetime(yr, 1, 4)
+        day1   = jan4 - timedelta(days=jan4.weekday())
+        ws     = day1 + timedelta(weeks=wn - 1)
+        we     = ws + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        result = []
+        for t in st.session_state.mtl_tasks:
+            try:
+                td = datetime.strptime(t["date"], "%Y-%m-%d")
+                if ws <= td <= we:
+                    result.append(t)
+            except Exception:
+                pass
+        return result
+    except Exception:
+        return st.session_state.mtl_tasks
+
+def tasks_of_month(year, month):
+    result = []
+    for t in st.session_state.mtl_tasks:
+        try:
+            td = datetime.strptime(t["date"], "%Y-%m-%d")
+            if td.year == year and td.month == month:
+                result.append(t)
+        except Exception:
+            pass
+    return result
+
+def tasks_of_year(year):
+    result = []
+    for t in st.session_state.mtl_tasks:
+        try:
+            td = datetime.strptime(t["date"], "%Y-%m-%d")
+            if td.year == year:
+                result.append(t)
+        except Exception:
+            pass
+    return result
+
+def cur_week_str():
+    n = datetime.now()
+    return n.strftime("%G-W%V")
+
+# ─── Tạo báo cáo tuần bằng Claude ────────────────────────────
+def tao_bao_cao_tuan(week_str, week_tasks):
+    tv_data = []
+    for m in THANH_VIEN:
+        mt   = [t for t in week_tasks if t.get("assignee") == m["id"]]
+        done = sum(1 for t in mt if t.get("done"))
+        # Task cứng
+        mand_done = sum(1 for mt2 in MANDATORY_TASKS
+                        if is_mandatory_done(week_str, m["id"], mt2["idx"]))
+        mand_notes = []
+        for mt2 in MANDATORY_TASKS:
+            note = get_mandatory_note(week_str, m["id"], mt2["idx"])
+            tick = "✓" if is_mandatory_done(week_str, m["id"], mt2["idx"]) else "○"
+            mand_notes.append(f"  [{tick}] {mt2['title']}" + (f" → {note}" if note else ""))
+        tv_data.append(
+            f"• {m['ho_ten']}: {done}/{len(mt)} task thường | "
+            f"Task bắt buộc: {mand_done}/{len(MANDATORY_TASKS)}\n"
+            + "\n".join(mand_notes)
+        )
+
+    task_lines = "\n".join(
+        f"- [{'✓' if t.get('done') else '○'}] {t['title']} "
+        f"| {ten_nv(t.get('assignee',''))} "
+        f"| {'Cao' if t.get('priority')=='high' else 'TB' if t.get('priority')=='medium' else 'Thấp'} "
+        f"| {t.get('date','—')}"
+        + (f" | Kết quả: {t['notes']}" if t.get('notes') and t.get('done') else "")
+        for t in week_tasks
+    ) or "Không có task nào trong tuần này."
+
+    total  = len(week_tasks)
+    done_n = sum(1 for t in week_tasks if t.get("done"))
+
+    prompt = f"""Viết BÁO CÁO CÔNG VIỆC TUẦN {week_str} của {TEN_CONG_TY} gửi Ban Lãnh Đạo.
+
+THỐNG KÊ TASK THƯỜNG: {total} task | {done_n} hoàn thành | {total - done_n} chưa xong
+
+TIẾN ĐỘ 5 MỤC TIÊU BẮT BUỘC (Power of One) VÀ TASK THƯỜNG THEO TỪNG LUẬT SƯ:
+{chr(10).join(tv_data) or 'Chưa có dữ liệu.'}
+
+DANH SÁCH TASK THƯỜNG:
+{task_lines}
+
+Yêu cầu: Viết tiếng Việt, văn phong pháp lý chuyên nghiệp, gồm:
+1. TỔNG KẾT THÀNH TÍCH TUẦN
+2. TIẾN ĐỘ 5 MỤC TIÊU "POWER OF ONE" (nêu rõ ai hoàn thành, ai chưa)
+3. ĐÁNH GIÁ HIỆU SUẤT TỪNG LUẬT SƯ
+4. CÔNG VIỆC TỒN ĐỌNG & GIẢI PHÁP
+5. KẾ HOẠCH CÔNG VIỆC TUẦN TỚI
+Ngắn gọn, súc tích, phù hợp trình lãnh đạo."""
+
+    return goi_claude(
+        [{"role": "user", "content": prompt}],
+        f"Bạn là trợ lý hành chính pháp lý tại {TEN_CONG_TY}. "
+        f"Viết báo cáo chuyên nghiệp, có cấu trúc rõ ràng.",
+    )
+
+# ─── Gửi báo cáo qua Gmail ────────────────────────────────────
+def gui_bao_cao_gmail(to_list, cc_list, subject, body):
+    """Gửi báo cáo đến nhiều người nhận TO + CC."""
+    svc = _gmail_service()
+    if not svc:
+        return False, "Chưa kết nối Gmail"
+    try:
+        from email.mime.text import MIMEText
+        msg = MIMEText(body, "plain", "utf-8")
+        sender = st.session_state.get(f"gemail_{nd['ten_tk']}", "me")
+        msg["From"]    = sender
+        msg["To"]      = ", ".join(to_list)
+        if cc_list:
+            msg["Cc"]  = ", ".join(cc_list)
+        msg["Subject"] = subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        return True, "OK"
+    except Exception as e:
+        return False, str(e)
+
+# ─── Biểu đồ cột HTML ─────────────────────────────────────────
+def ve_bieu_do(labels, done_vals, todo_vals, title=""):
+    """Render biểu đồ cột chồng (done=xanh, todo=vàng) bằng HTML thuần."""
+    max_v = max(max(done_vals + todo_vals, default=1), 1)
+    bar_h = 160  # px chiều cao tối đa
+
+    bars_html = ""
+    for i, lbl in enumerate(labels):
+        d = done_vals[i] if i < len(done_vals) else 0
+        u = todo_vals[i]  if i < len(todo_vals) else 0
+        ph_d = int((d / max_v) * bar_h)
+        ph_u = int((u / max_v) * bar_h)
+        val_lbl = f"{d}/{d+u}" if (d + u) > 0 else ""
+        bars_html += f"""
+<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;gap:2px;cursor:default;"
+     title="{lbl}: {d} hoàn thành / {d+u} tổng">
+  <div style="font-size:10px;font-weight:600;color:#555;">{val_lbl}</div>
+  <div style="display:flex;flex-direction:column;justify-content:flex-end;height:{bar_h}px;width:100%;gap:1px;">
+    <div style="background:#0f6e56;border-radius:3px 3px 0 0;height:{ph_d}px;width:100%;"></div>
+    <div style="background:#C9A96E;border-radius:3px 3px 0 0;height:{ph_u}px;width:100%;"></div>
+  </div>
+  <div style="font-size:10px;color:#666;text-align:center;white-space:nowrap;
+              overflow:hidden;text-overflow:ellipsis;width:100%;">{lbl}</div>
+</div>"""
+
+    legend = (
+        "<span style='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;margin-right:12px;'>"
+        "<span style='width:10px;height:10px;border-radius:2px;background:#0f6e56;display:inline-block;'></span>Hoàn thành</span>"
+        "<span style='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;'>"
+        "<span style='width:10px;height:10px;border-radius:2px;background:#C9A96E;display:inline-block;'></span>Chưa xong</span>"
+    )
+
+    return f"""
+<div style="margin-bottom:6px;font-size:12px;font-weight:600;color:{MTL_NAVY};">{title}</div>
+<div style="margin-bottom:8px;">{legend}</div>
+<div style="display:flex;gap:4px;align-items:flex-end;height:{bar_h+40}px;padding:0 4px;">
+  {bars_html}
+</div>"""
+
+
+# ══════════════════════════════════════════════════════════════
+#  RENDER TAB 6
+# ══════════════════════════════════════════════════════════════
+with tab6:
+    is_admin = (nd.get("vai_tro") == "quan_tri")
+
+    # ── Banner ──
+    st.markdown(f"""
+<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);
+border-radius:10px;padding:14px 20px;margin-bottom:18px;
+border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content:space-between;">
+  <div>
+    <span style="color:white;font-size:1.05rem;font-weight:700;">📌 Quản lý Công việc</span>
+    <span style="color:{MTL_GOLD2};font-size:0.8rem;margin-left:12px;">
+      Task · Lịch · Hiệu suất · Báo cáo tuần tự động
+    </span>
+  </div>
+  <div style="background:rgba(168,135,74,0.2);border:1px solid {MTL_GOLD}55;
+  border-radius:8px;padding:5px 12px;font-size:0.78rem;color:{MTL_GOLD2};">
+    📅 Gửi tự động: Thứ 5 · 20:00
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    # ── Sub-tabs ──
+    if is_admin:
+        stab_labels = ["📋 Task", "📅 Lịch tuần", "📊 Hiệu suất", "📤 Báo cáo & Gửi"]
+    else:
+        stab_labels = ["📋 Task của tôi", "📅 Lịch tuần", "📤 Báo cáo & Gửi"]
+
+    stabs = st.tabs(stab_labels)
+
+    # ════════════════════════════════════════════
+    #  STAB 0 — DANH SÁCH TASK
+    # ════════════════════════════════════════════
+    with stabs[0]:
+        cur_wk_now = cur_week_str()
+
+        # ── PHẦN 1: 5 TASK CỨNG BẮT BUỘC ───────────────────────
+        st.markdown(f"""
+<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);
+border-radius:10px;padding:12px 18px;margin-bottom:14px;
+border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
+  <span style="font-size:1.1rem;">🎯</span>
+  <div>
+    <span style="color:white;font-weight:700;font-size:0.95rem;">Task bắt buộc tuần — Power of One</span>
+    <span style="color:{MTL_GOLD2};font-size:0.78rem;margin-left:10px;">5 mục tiêu cốt lõi · Tuần {cur_wk_now}</span>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        # Xác định user nào đang xem (admin xem tất cả, ls xem mình)
+        if is_admin:
+            mandatory_users = THANH_VIEN
+        else:
+            mandatory_users = [m for m in THANH_VIEN if m["id"] == nd["ten_tk"]]
+
+        for m_user in mandatory_users:
+            uid = m_user["id"]
+            done_count = sum(1 for mt in MANDATORY_TASKS
+                             if is_mandatory_done(cur_wk_now, uid, mt["idx"]))
+
+            if is_admin:
+                pct = int(done_count / len(MANDATORY_TASKS) * 100)
+                bar_c = "#0f6e56" if pct == 100 else (MTL_GOLD if pct >= 60 else "#e24b4a")
+                st.markdown(
+                    f"<div style='display:flex;align-items:center;gap:10px;margin:6px 0 4px;'>"
+                    f"<div style='width:26px;height:26px;border-radius:50%;background:{MTL_NAVY};"
+                    f"color:{MTL_GOLD2};display:flex;align-items:center;justify-content:center;"
+                    f"font-size:11px;font-weight:700;flex-shrink:0;'>{m_user['ho_ten'][0]}</div>"
+                    f"<span style='font-size:0.83rem;font-weight:600;color:{MTL_NAVY};'>"
+                    f"{m_user['ho_ten']}</span>"
+                    f"<div style='flex:1;background:#e0e8f5;border-radius:4px;height:5px;overflow:hidden;'>"
+                    f"<div style='background:{bar_c};width:{pct}%;height:5px;'></div></div>"
+                    f"<span style='font-size:0.75rem;color:#666;min-width:36px;text-align:right;'>"
+                    f"{done_count}/{len(MANDATORY_TASKS)}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            for mt in MANDATORY_TASKS:
+                k_done = f"mand_cb_{uid}_{mt['idx']}_{cur_wk_now}"
+                k_note = f"mand_note_{uid}_{mt['idx']}_{cur_wk_now}"
+                k_exp  = f"mand_exp_{uid}_{mt['idx']}_{cur_wk_now}"
+                done   = is_mandatory_done(cur_wk_now, uid, mt["idx"])
+                note   = get_mandatory_note(cur_wk_now, uid, mt["idx"])
+
+                pri_color = MTL_NAVY if mt["priority"] == "high" else MTL_GOLD
+                done_style = "opacity:0.55;" if done else ""
+                strike     = "text-decoration:line-through;color:#999;" if done else f"color:{MTL_NAVY};"
+
+                # Chỉ cho phép tick nếu đúng user (hoặc admin có thể tick mọi người)
+                can_tick = is_admin or (uid == nd["ten_tk"])
+
+                row1, row2, row3 = st.columns([0.5, 7.5, 2])
+                with row1:
+                    if can_tick:
+                        if st.button(
+                            "☑" if done else "☐",
+                            key=k_done,
+                            help="Đánh dấu hoàn thành",
+                        ):
+                            set_mandatory_done(cur_wk_now, uid, mt["idx"], not done)
+                            st.rerun()
+                    else:
+                        st.markdown(
+                            f"<div style='padding:4px;color:{'#0f6e56' if done else '#ccc'};font-size:1rem;'>{'☑' if done else '☐'}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                with row2:
+                    st.markdown(
+                        f"<div style='{done_style}display:flex;align-items:center;gap:8px;padding:3px 0;'>"
+                        f"<span style='font-size:1rem;'>{mt['icon']}</span>"
+                        f"<div>"
+                        f"<span style='{strike}font-size:0.88rem;font-weight:600;'>{mt['title']}</span>"
+                        f"<span style='background:{pri_color}22;color:{pri_color};font-size:10px;"
+                        f"border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:600;'>BẮT BUỘC</span>"
+                        + (f"<span style='background:#eaf3de;color:#27500a;font-size:10px;"
+                           f"border-radius:4px;padding:1px 6px;margin-left:4px;'>✓ Xong</span>" if done else "")
+                        + f"<div style='font-size:0.75rem;color:#888;margin-top:1px;'>{mt['desc']}</div>"
+                        + (f"<div style='font-size:0.76rem;color:#555;font-style:italic;margin-top:2px;'>"
+                           f"📝 {note}</div>" if note else "")
+                        + f"</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+                with row3:
+                    if can_tick:
+                        with st.expander("📝 Ghi chú", expanded=False):
+                            new_note = st.text_input(
+                                "Kết quả",
+                                value=note,
+                                key=k_note,
+                                placeholder="Ghi chú kết quả thực hiện...",
+                                label_visibility="collapsed",
+                            )
+                            if new_note != note:
+                                set_mandatory_note(cur_wk_now, uid, mt["idx"], new_note)
+                                st.rerun()
+
+                st.markdown(
+                    "<div style='height:1px;background:#f0f3fa;margin:2px 0;'></div>",
+                    unsafe_allow_html=True,
+                )
+
+            if is_admin and len(mandatory_users) > 1:
+                st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Tổng tiến độ 5 task bắt buộc của mình ──
+        my_done_count = sum(1 for mt in MANDATORY_TASKS
+                            if is_mandatory_done(cur_wk_now, nd["ten_tk"], mt["idx"]))
+        pct_my = int(my_done_count / len(MANDATORY_TASKS) * 100)
+        bar_color_my = "#0f6e56" if pct_my == 100 else (MTL_GOLD if pct_my >= 60 else "#e24b4a")
+        status_lbl = "🎉 Hoàn thành xuất sắc!" if pct_my == 100 else f"Còn {len(MANDATORY_TASKS)-my_done_count} mục chưa xong"
+
+        st.markdown(
+            f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;border-radius:8px;"
+            f"padding:10px 14px;margin:8px 0 16px;display:flex;align-items:center;gap:14px;'>"
+            f"<div style='flex:1;'>"
+            f"<div style='font-size:0.8rem;color:#555;margin-bottom:5px;font-weight:600;'>"
+            f"Tiến độ task bắt buộc tuần của bạn: <span style='color:{bar_color_my};'>{status_lbl}</span></div>"
+            f"<div style='background:#e0e8f5;border-radius:4px;height:8px;overflow:hidden;'>"
+            f"<div style='background:{bar_color_my};width:{pct_my}%;height:8px;"
+            f"border-radius:4px;transition:width .3s;'></div></div></div>"
+            f"<div style='font-size:1.4rem;font-weight:700;color:{bar_color_my};min-width:40px;text-align:right;'>"
+            f"{pct_my}%</div></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"<div style='font-weight:700;font-size:0.95rem;color:{MTL_NAVY};"
+            f"margin-bottom:10px;border-left:3px solid {MTL_GOLD};padding-left:10px;'>"
+            f"📋 Task công việc thường</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Lọc task theo role
+        all_tasks = st.session_state.mtl_tasks
+        if is_admin:
+            view_tasks = all_tasks
+        else:
+            view_tasks = [t for t in all_tasks if t.get("assignee") == nd["ten_tk"]]
+
+        # ── Thanh thống kê ──
+        total_t = len(view_tasks)
+        done_t  = sum(1 for t in view_tasks if t.get("done"))
+        todo_t  = total_t - done_t
+        hi_t    = sum(1 for t in view_tasks if t.get("priority") == "high" and not t.get("done"))
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tổng task", total_t)
+        c2.metric("Đã hoàn thành", done_t, delta=f"{int(done_t/total_t*100) if total_t else 0}%")
+        c3.metric("Chưa xong", todo_t)
+        c4.metric("🔴 Ưu tiên cao", hi_t)
+
+        st.markdown("---")
+
+        # ── Bộ lọc ──
+        fc1, fc2, fc3, fc4 = st.columns([2, 1.5, 1.5, 1])
+        with fc1:
+            search_q = st.text_input("🔍 Tìm task", placeholder="Tên task...", label_visibility="collapsed", key="task_search")
+        with fc2:
+            if is_admin:
+                nv_opts = ["Tất cả"] + [m["ho_ten"] for m in THANH_VIEN]
+                filter_nv = st.selectbox("Nhân viên", nv_opts, label_visibility="collapsed", key="task_fnv")
+            else:
+                filter_nv = "Tất cả"
+        with fc3:
+            filter_status = st.selectbox("Trạng thái", ["Tất cả", "Chưa xong", "Đã xong"],
+                                         label_visibility="collapsed", key="task_fst")
+        with fc4:
+            if st.button("➕ Thêm task", type="primary", use_container_width=True, key="task_add_btn"):
+                st.session_state.mtl_task_edit_id = "__new__"
+                st.rerun()
+
+        # ── Form thêm / sửa task ──
+        edit_id = st.session_state.mtl_task_edit_id
+        if edit_id:
+            editing_task = None
+            if edit_id != "__new__":
+                editing_task = next((t for t in all_tasks if t["id"] == edit_id), None)
+
+            with st.expander(
+                "✏️ Sửa task" if editing_task else "➕ Thêm task mới",
+                expanded=True,
+            ):
+                with st.form("task_form", clear_on_submit=False):
+                    ef1, ef2 = st.columns(2)
+                    with ef1:
+                        tf_title = st.text_input("Tiêu đề *",
+                                                  value=editing_task["title"] if editing_task else "",
+                                                  placeholder="Nhập tiêu đề task...")
+                        tf_date  = st.date_input("Ngày thực hiện",
+                                                  value=datetime.strptime(editing_task["date"], "%Y-%m-%d").date()
+                                                  if editing_task and editing_task.get("date") else datetime.now().date())
+                        tf_priority = st.selectbox("Độ ưu tiên",
+                                                    ["high", "medium", "low"],
+                                                    format_func=lambda x: {"high":"🔴 Cao","medium":"🟡 Trung bình","low":"🟢 Thấp"}[x],
+                                                    index={"high":0,"medium":1,"low":2}.get(
+                                                        editing_task.get("priority","medium") if editing_task else "medium", 1))
+                    with ef2:
+                        nv_ids   = [m["id"] for m in THANH_VIEN]
+                        nv_names = [m["ho_ten"] for m in THANH_VIEN]
+                        cur_nv   = editing_task.get("assignee", nd["ten_tk"]) if editing_task else nd["ten_tk"]
+                        nv_idx   = nv_ids.index(cur_nv) if cur_nv in nv_ids else 0
+                        tf_assignee = st.selectbox("Người thực hiện", nv_ids,
+                                                    format_func=lambda x: ten_nv(x),
+                                                    index=nv_idx)
+                        tf_status   = st.selectbox("Trạng thái",
+                                                    ["todo", "done"],
+                                                    format_func=lambda x: "✅ Đã hoàn thành" if x=="done" else "⏳ Chưa xong",
+                                                    index=1 if (editing_task and editing_task.get("done")) else 0)
+                        tf_add_cal  = st.checkbox("📆 Thêm vào Google Calendar",
+                                                   value=True if not editing_task else False)
+                    tf_desc  = st.text_area("Mô tả", value=editing_task.get("desc","") if editing_task else "",
+                                             placeholder="Mô tả chi tiết công việc...", height=70)
+                    tf_notes = st.text_area("Ghi chú / Kết quả",
+                                             value=editing_task.get("notes","") if editing_task else "",
+                                             placeholder="Ghi chú sau khi hoàn thành...", height=60)
+
+                    sb1, sb2, sb3 = st.columns([1,1,3])
+                    with sb1:
+                        saved = st.form_submit_button("💾 Lưu", type="primary", use_container_width=True)
+                    with sb2:
+                        cancelled = st.form_submit_button("Hủy", use_container_width=True)
+
+                    if cancelled:
+                        st.session_state.mtl_task_edit_id = None
+                        st.rerun()
+
+                    if saved:
+                        if not tf_title.strip():
+                            st.error("Vui lòng nhập tiêu đề task!")
+                        else:
+                            now_str = datetime.now().isoformat()
+                            is_done = (tf_status == "done")
+                            if editing_task:
+                                for t in st.session_state.mtl_tasks:
+                                    if t["id"] == edit_id:
+                                        t.update({
+                                            "title":      tf_title.strip(),
+                                            "desc":       tf_desc.strip(),
+                                            "assignee":   tf_assignee,
+                                            "priority":   tf_priority,
+                                            "date":       tf_date.strftime("%Y-%m-%d"),
+                                            "notes":      tf_notes.strip(),
+                                            "done":       is_done,
+                                            "updated_at": now_str,
+                                        })
+                                        if is_done and not t.get("completed_at"):
+                                            t["completed_at"] = now_str
+                                        break
+                            else:
+                                new_task = {
+                                    "id":         task_gen_id(),
+                                    "title":      tf_title.strip(),
+                                    "desc":       tf_desc.strip(),
+                                    "assignee":   tf_assignee,
+                                    "priority":   tf_priority,
+                                    "date":       tf_date.strftime("%Y-%m-%d"),
+                                    "notes":      tf_notes.strip(),
+                                    "done":       is_done,
+                                    "created_at": now_str,
+                                    "updated_at": now_str,
+                                    "completed_at": now_str if is_done else None,
+                                    "cal_added":  False,
+                                }
+                                st.session_state.mtl_tasks.insert(0, new_task)
+
+                                # Thêm Google Calendar nếu được chọn
+                                if tf_add_cal and _gmail_service():
+                                    try:
+                                        from googleapiclient.discovery import build as _build
+                                        svc_cal = _build("calendar", "v3",
+                                                         credentials=st.session_state.get(f"gcred_{nd['ten_tk']}"))
+                                        event = {
+                                            "summary":     tf_title.strip(),
+                                            "description": tf_desc.strip(),
+                                            "start": {"date": tf_date.strftime("%Y-%m-%d")},
+                                            "end":   {"date": tf_date.strftime("%Y-%m-%d")},
+                                            "attendees": [{"email": st.session_state.get(
+                                                f"gemail_{nd['ten_tk']}", "")}],
+                                        }
+                                        svc_cal.events().insert(
+                                            calendarId="primary", body=event
+                                        ).execute()
+                                        new_task["cal_added"] = True
+                                    except Exception:
+                                        pass  # Calendar không bắt buộc
+
+                            st.session_state.mtl_task_edit_id = None
+                            st.success("✅ Đã lưu task!")
+                            st.rerun()
+
+        # ── Lọc danh sách ──
+        filtered = view_tasks
+        if search_q.strip():
+            filtered = [t for t in filtered if search_q.lower() in t["title"].lower()
+                        or search_q.lower() in t.get("desc","").lower()]
+        if filter_nv != "Tất cả":
+            nv_id = next((m["id"] for m in THANH_VIEN if m["ho_ten"] == filter_nv), None)
+            if nv_id:
+                filtered = [t for t in filtered if t.get("assignee") == nv_id]
+        if filter_status == "Chưa xong":
+            filtered = [t for t in filtered if not t.get("done")]
+        elif filter_status == "Đã xong":
+            filtered = [t for t in filtered if t.get("done")]
+
+        st.caption(f"{len(filtered)} task")
+
+        # ── Hiển thị từng task ──
+        PRI_MAP  = {"high": ("🔴", "Cao"), "medium": ("🟡", "TB"), "low": ("🟢", "Thấp")}
+        if not filtered:
+            st.info("Chưa có task nào. Nhấn ➕ Thêm task để bắt đầu.")
+        else:
+            for task in filtered:
+                icon_p, lbl_p = PRI_MAP.get(task.get("priority","medium"), ("🟡","TB"))
+                done_icon = "✅" if task.get("done") else "⏳"
+                cal_badge = " 📆" if task.get("cal_added") else ""
+
+                with st.container():
+                    col_cb, col_info, col_act = st.columns([0.5, 7, 2.5])
+
+                    with col_cb:
+                        # Nút tick hoàn thành
+                        if st.button(
+                            "☑" if task.get("done") else "☐",
+                            key=f"cb_{task['id']}",
+                            help="Đánh dấu hoàn thành / chưa xong",
+                        ):
+                            for t in st.session_state.mtl_tasks:
+                                if t["id"] == task["id"]:
+                                    t["done"] = not t["done"]
+                                    if t["done"]:
+                                        t["completed_at"] = datetime.now().isoformat()
+                                    else:
+                                        t["completed_at"] = None
+                                    break
+                            st.rerun()
+
+                    with col_info:
+                        title_style = "text-decoration:line-through;color:#999;" if task.get("done") else ""
+                        completed_lbl = ""
+                        if task.get("done") and task.get("completed_at"):
+                            try:
+                                dt_c = datetime.fromisoformat(task["completed_at"])
+                                completed_lbl = f" · Xong {dt_c.strftime('%d/%m')}"
+                            except Exception:
+                                pass
+
+                        st.markdown(
+                            f"<div style='{title_style}font-weight:600;font-size:0.92rem;'>"
+                            f"{done_icon} {task['title']}</div>"
+                            f"<div style='font-size:0.78rem;color:#666;margin-top:2px;'>"
+                            f"👤 {ten_nv(task.get('assignee',''))} &nbsp;|&nbsp; "
+                            f"{icon_p} {lbl_p} &nbsp;|&nbsp; 📅 {task.get('date','—')}"
+                            f"{cal_badge}{completed_lbl}"
+                            + (f" &nbsp;|&nbsp; <i>\"{task['notes'][:60]}{'…' if len(task.get('notes',''))>60 else ''}\"</i>"
+                               if task.get("notes") and task.get("done") else "")
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    with col_act:
+                        ba1, ba2 = st.columns(2)
+                        with ba1:
+                            if st.button("✏️", key=f"edit_{task['id']}", help="Sửa task"):
+                                st.session_state.mtl_task_edit_id = task["id"]
+                                st.rerun()
+                        with ba2:
+                            if st.button("🗑️", key=f"del_{task['id']}", help="Xóa task"):
+                                st.session_state.mtl_tasks = [
+                                    t for t in st.session_state.mtl_tasks if t["id"] != task["id"]
+                                ]
+                                st.rerun()
+
+                st.markdown(
+                    "<div style='height:1px;background:#f0f0f0;margin:2px 0 4px;'></div>",
+                    unsafe_allow_html=True,
+                )
+
+    # ════════════════════════════════════════════
+    #  STAB 1 — LỊCH CÔNG VIỆC
+    # ════════════════════════════════════════════
+    with stabs[1]:
+        now = datetime.now()
+        if "mtl_cal_offset" not in st.session_state:
+            st.session_state.mtl_cal_offset = 0
+
+        # Điều hướng tuần
+        nav1, nav2, nav3, nav4 = st.columns([1, 2, 1, 4])
+        with nav1:
+            if st.button("‹ Tuần trước", use_container_width=True, key="cal_prev"):
+                st.session_state.mtl_cal_offset -= 1
+                st.rerun()
+        with nav3:
+            if st.button("Tuần sau ›", use_container_width=True, key="cal_next"):
+                st.session_state.mtl_cal_offset += 1
+                st.rerun()
+        with nav2:
+            if st.button("Hôm nay", use_container_width=True, key="cal_today"):
+                st.session_state.mtl_cal_offset = 0
+                st.rerun()
+
+        offset     = st.session_state.mtl_cal_offset
+        week_start = now - timedelta(days=now.weekday()) + timedelta(weeks=offset)
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        st.markdown(
+            f"<div style='text-align:center;font-weight:700;color:{MTL_NAVY};margin-bottom:12px;'>"
+            f"📅 Tuần {week_start.strftime('%d/%m')} — "
+            f"{(week_start + timedelta(days=6)).strftime('%d/%m/%Y')}</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Build calendar HTML
+        day_names = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
+        cal_html  = "<div style='display:grid;grid-template-columns:repeat(7,1fr);gap:6px;'>"
+
+        for i in range(7):
+            day      = week_start + timedelta(days=i)
+            day_str  = day.strftime("%Y-%m-%d")
+            is_today = (day.date() == now.date())
+            day_tasks = [t for t in st.session_state.mtl_tasks if t.get("date") == day_str]
+
+            # Nếu không phải admin, chỉ hiển thị task của mình
+            if not is_admin:
+                day_tasks = [t for t in day_tasks if t.get("assignee") == nd["ten_tk"]]
+
+            hdr_bg  = MTL_NAVY if is_today else "#f8f9fc"
+            hdr_clr = "white"  if is_today else MTL_NAVY
+
+            task_html = ""
+            for t in day_tasks:
+                bg_t   = "#0f6e56" if t.get("done") else MTL_NAVY
+                txt_t  = "#9fe1cb" if t.get("done") else MTL_GOLD2
+                strike = "text-decoration:line-through;" if t.get("done") else ""
+                t_title  = t["title"]
+                t_assign = ten_nv(t.get("assignee", ""))
+                task_html += (
+                    "<div style='background:" + bg_t + ";color:" + txt_t + ";border-radius:4px;"
+                    "padding:3px 5px;font-size:10px;margin-bottom:3px;" + strike +
+                    "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'"
+                    " title='" + t_title + " - " + t_assign + "'>"
+                    + t_title + "</div>"
+                )
+
+            border_style = "2px solid " + MTL_NAVY if is_today else "1px solid #e0e8f5"
+            cal_html += (
+                "<div style='border:" + border_style + ";"
+                f"border-radius:8px;overflow:hidden;min-height:120px;'>"
+                f"<div style='background:{hdr_bg};color:{hdr_clr};font-size:11px;"
+                f"font-weight:600;padding:5px 7px;text-align:center;'>"
+                f"{day_names[i]}<br>{day.strftime('%d/%m')}</div>"
+                f"<div style='padding:6px;background:white;min-height:90px;'>"
+                f"{task_html if task_html else '<span style=\"color:#ccc;font-size:10px;\">Trống</span>'}"
+                f"</div></div>"
+            )
+
+        cal_html += "</div>"
+        st.markdown(cal_html, unsafe_allow_html=True)
+
+        st.markdown(
+            "<div style='margin-top:10px;font-size:11px;color:#999;'>"
+            "🟦 Task chưa xong &nbsp;|&nbsp; 🟩 Đã hoàn thành</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ════════════════════════════════════════════
+    #  STAB 2 — HIỆU SUẤT (chỉ admin)
+    # ════════════════════════════════════════════
+    if is_admin:
+        with stabs[2]:
+            st.markdown(
+                f"<div style='font-weight:700;font-size:1rem;color:{MTL_NAVY};"
+                f"margin-bottom:16px;'>📊 Phân tích hiệu suất nhân viên</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Bộ lọc kỳ
+            hp1, hp2, hp3 = st.columns([2, 1, 3])
+            with hp1:
+                period_sel = st.radio(
+                    "Xem theo",
+                    ["Tuần", "Tháng", "Năm"],
+                    horizontal=True,
+                    key="perf_period_radio",
+                )
+            with hp2:
+                year_sel = st.selectbox(
+                    "Năm",
+                    list(range(datetime.now().year, datetime.now().year - 5, -1)),
+                    key="perf_year_sel",
+                )
+
+            all_t = st.session_state.mtl_tasks
+
+            # ── Số liệu tổng ──
+            if period_sel == "Tuần":
+                period_tasks = tasks_of_year(year_sel)
+                title_suffix = f"năm {year_sel}"
+            elif period_sel == "Tháng":
+                period_tasks = tasks_of_year(year_sel)
+                title_suffix = f"năm {year_sel}"
+            else:
+                period_tasks = tasks_of_year(year_sel)
+                title_suffix = f"năm {year_sel}"
+
+            done_all = sum(1 for t in period_tasks if t.get("done"))
+            rate_all = int(done_all / len(period_tasks) * 100) if period_tasks else 0
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(f"Task {title_suffix}", len(period_tasks))
+            m2.metric("Hoàn thành", done_all, delta=f"{rate_all}%")
+            m3.metric("Chưa xong", len(period_tasks) - done_all)
+            m4.metric("Tỷ lệ TB", f"{rate_all}%")
+
+            st.markdown("---")
+
+            # ── Biểu đồ theo kỳ ──
+            if period_sel == "Tuần":
+                labels, done_v, todo_v = [], [], []
+                for w in range(7, -1, -1):
+                    ref = datetime.now() - timedelta(weeks=w)
+                    wstr = ref.strftime("%G-W%V")
+                    wt = tasks_of_week(wstr)
+                    done_v.append(sum(1 for t in wt if t.get("done")))
+                    todo_v.append(sum(1 for t in wt if not t.get("done")))
+                    labels.append(f"T{ref.strftime('%V')}")
+                chart_title = "Task 8 tuần gần nhất"
+
+            elif period_sel == "Tháng":
+                labels, done_v, todo_v = [], [], []
+                for m in range(1, 13):
+                    mt = tasks_of_month(year_sel, m)
+                    done_v.append(sum(1 for t in mt if t.get("done")))
+                    todo_v.append(sum(1 for t in mt if not t.get("done")))
+                    labels.append(f"T{m}")
+                chart_title = f"Task 12 tháng năm {year_sel}"
+
+            else:  # Năm
+                labels, done_v, todo_v = [], [], []
+                for y in range(year_sel - 4, year_sel + 1):
+                    yt = tasks_of_year(y)
+                    done_v.append(sum(1 for t in yt if t.get("done")))
+                    todo_v.append(sum(1 for t in yt if not t.get("done")))
+                    labels.append(str(y))
+                chart_title = "Task 5 năm gần nhất"
+
+            st.markdown(
+                f"<div style='background:white;border:1px solid #e0e8f5;border-radius:10px;"
+                f"padding:16px 20px;margin-bottom:20px;'>"
+                + ve_bieu_do(labels, done_v, todo_v, chart_title)
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+            # ── Thẻ hiệu suất từng luật sư ──
+            st.markdown(
+                f"<div style='font-weight:600;color:{MTL_NAVY};margin-bottom:10px;'>"
+                f"👤 Hiệu suất từng luật sư — {title_suffix}</div>",
+                unsafe_allow_html=True,
+            )
+
+            member_rows = []
+            for m in THANH_VIEN:
+                mt   = [t for t in period_tasks if t.get("assignee") == m["id"]]
+                done = sum(1 for t in mt if t.get("done"))
+                rate = int(done / len(mt) * 100) if mt else 0
+                hi   = sum(1 for t in mt if t.get("priority") == "high")
+                member_rows.append((m, mt, done, rate, hi))
+
+            member_rows.sort(key=lambda x: x[3], reverse=True)  # Sắp xếp theo tỷ lệ
+
+            cols_nv = st.columns(2)
+            for idx, (m, mt, done, rate, hi) in enumerate(member_rows):
+                bar_color = "#0f6e56" if rate >= 80 else ("#C9A96E" if rate >= 50 else "#e24b4a")
+                rank_icon = ["🥇","🥈","🥉"][idx] if idx < 3 else f"#{idx+1}"
+
+                with cols_nv[idx % 2]:
+                    st.markdown(
+                        f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;"
+                        f"border-radius:10px;padding:14px;margin-bottom:12px;'>"
+                        f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px;'>"
+                        f"<div style='width:34px;height:34px;border-radius:50%;background:{MTL_NAVY};"
+                        f"color:{MTL_GOLD2};display:flex;align-items:center;justify-content:center;"
+                        f"font-weight:700;font-size:14px;'>{m['ho_ten'][0]}</div>"
+                        f"<div><div style='font-weight:600;font-size:0.88rem;'>{m['ho_ten']}</div>"
+                        f"<div style='font-size:0.75rem;color:#888;'>{m['chuc_vu']}</div></div>"
+                        f"<div style='margin-left:auto;font-size:1.1rem;'>{rank_icon}</div>"
+                        f"</div>"
+                        # Metrics
+                        f"<div style='display:grid;grid-template-columns:repeat(3,1fr);"
+                        f"gap:6px;margin-bottom:10px;text-align:center;'>"
+                        f"<div style='background:white;border-radius:6px;padding:6px;"
+                        f"border:1px solid #e0e8f5;'>"
+                        f"<div style='font-size:1.2rem;font-weight:700;color:{MTL_NAVY};'>{len(mt)}</div>"
+                        f"<div style='font-size:10px;color:#888;'>Tổng</div></div>"
+                        f"<div style='background:white;border-radius:6px;padding:6px;"
+                        f"border:1px solid #e0e8f5;'>"
+                        f"<div style='font-size:1.2rem;font-weight:700;color:#0f6e56;'>{done}</div>"
+                        f"<div style='font-size:10px;color:#888;'>Xong</div></div>"
+                        f"<div style='background:white;border-radius:6px;padding:6px;"
+                        f"border:1px solid #e0e8f5;'>"
+                        f"<div style='font-size:1.2rem;font-weight:700;color:{bar_color};'>{rate}%</div>"
+                        f"<div style='font-size:10px;color:#888;'>Tỷ lệ</div></div>"
+                        f"</div>"
+                        # Thanh tiến độ
+                        f"<div style='background:#e0e8f5;border-radius:4px;height:6px;overflow:hidden;'>"
+                        f"<div style='background:{bar_color};width:{rate}%;height:6px;"
+                        f"border-radius:4px;'></div></div>"
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"font-size:10px;color:#999;margin-top:3px;'>"
+                        f"<span>Hoàn thành</span><span>{rate}%</span></div>"
+                        + (f"<div style='margin-top:6px;font-size:10px;color:#888;'>"
+                           f"Ưu tiên cao: {hi} task</div>" if hi else "")
+                        + f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+            # ── Bảng xếp hạng ──
+            st.markdown(
+                f"<div style='font-weight:600;color:{MTL_NAVY};margin:16px 0 10px;'>"
+                f"🏆 Bảng xếp hạng — {title_suffix}</div>",
+                unsafe_allow_html=True,
+            )
+
+            rank_medals = ["🥇","🥈","🥉"]
+            max_done    = max((r[2] for r in member_rows), default=1)
+            table_html  = (
+                f"<table style='width:100%;border-collapse:collapse;font-size:0.82rem;'>"
+                f"<thead><tr style='background:{MTL_NAVY};color:white;'>"
+                f"<th style='padding:8px 10px;text-align:left;'>#</th>"
+                f"<th style='padding:8px 10px;text-align:left;'>Luật sư</th>"
+                f"<th style='padding:8px 10px;text-align:center;'>Hoàn thành</th>"
+                f"<th style='padding:8px 10px;text-align:center;'>Tổng</th>"
+                f"<th style='padding:8px 10px;text-align:center;'>Tỷ lệ</th>"
+                f"<th style='padding:8px 10px;'>Hiệu suất</th>"
+                f"</tr></thead><tbody>"
+            )
+            for i, (m, mt, done, rate, hi) in enumerate(member_rows):
+                bg_row = "#f8f9fc" if i % 2 == 0 else "white"
+                medal  = rank_medals[i] if i < 3 else f"#{i+1}"
+                rate_c = "#0f6e56" if rate >= 80 else ("#C9A96E" if rate >= 50 else "#e24b4a")
+                bar_w  = int(done / max_done * 100) if max_done else 0
+                table_html += (
+                    f"<tr style='background:{bg_row};'>"
+                    f"<td style='padding:8px 10px;'>{medal}</td>"
+                    f"<td style='padding:8px 10px;font-weight:600;'>{m['ho_ten']}</td>"
+                    f"<td style='padding:8px 10px;text-align:center;color:#0f6e56;"
+                    f"font-weight:700;'>{done}</td>"
+                    f"<td style='padding:8px 10px;text-align:center;color:#888;'>{len(mt)}</td>"
+                    f"<td style='padding:8px 10px;text-align:center;'>"
+                    f"<span style='background:{rate_c}22;color:{rate_c};border-radius:4px;"
+                    f"padding:2px 7px;font-weight:600;'>{rate}%</span></td>"
+                    f"<td style='padding:8px 10px;'>"
+                    f"<div style='background:#e0e8f5;border-radius:3px;height:5px;width:120px;'>"
+                    f"<div style='background:{rate_c};width:{bar_w}%;height:5px;"
+                    f"border-radius:3px;'></div></div></td>"
+                    f"</tr>"
+                )
+            table_html += "</tbody></table>"
+            st.markdown(
+                f"<div style='border:1px solid #e0e8f5;border-radius:10px;"
+                f"overflow:hidden;'>{table_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+    # ════════════════════════════════════════════
+    #  STAB 3 (admin) / STAB 2 (luật sư) — BÁO CÁO
+    # ════════════════════════════════════════════
+    rpt_tab_idx = 3 if is_admin else 2
+    with stabs[rpt_tab_idx]:
+        st.markdown(
+            f"<div style='font-weight:700;font-size:0.95rem;color:{MTL_NAVY};"
+            f"margin-bottom:16px;'>📤 Báo cáo công việc tuần — Gửi Gmail tự động Thứ 5 · 20:00</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Kiểm tra tự động gửi (Thứ 5, 20:xx)
+        _now = datetime.now()
+        _is_thu5_20h = (_now.weekday() == 3 and _now.hour == 20)
+        _cur_wk = cur_week_str()
+        _auto_triggered = (
+            _is_thu5_20h and
+            st.session_state.mtl_last_sent_week != _cur_wk and
+            bool(st.session_state.mtl_tasks)
+        )
+
+        if _auto_triggered:
+            st.warning("🤖 Phát hiện Thứ 5 lúc 20:00 — đang tự động tạo và gửi báo cáo tuần!")
+
+        # Chọn tuần
+        rc1, rc2 = st.columns([2, 3])
+        with rc1:
+            week_input = st.text_input(
+                "Tuần báo cáo (ISO, vd: 2026-W17)",
+                value=_cur_wk,
+                key="rpt_week_input",
+            )
+
+        # Lấy task tuần được chọn
+        week_tasks_rpt = tasks_of_week(week_input)
+        done_rpt  = sum(1 for t in week_tasks_rpt if t.get("done"))
+        total_rpt = len(week_tasks_rpt)
+
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Task tuần", total_rpt)
+        r2.metric("Hoàn thành", done_rpt)
+        r3.metric("Chưa xong", total_rpt - done_rpt)
+        r4.metric("Tỷ lệ", f"{int(done_rpt/total_rpt*100) if total_rpt else 0}%")
+
+        st.markdown("---")
+
+        # Cấu hình email (chỉ hiển thị đầy đủ cho admin)
+        if is_admin:
+            with st.expander("📧 Cấu hình danh sách gửi", expanded=False):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    to_emails = st.text_area(
+                        "Email nhận chính (TO) — mỗi dòng 1 email",
+                        placeholder="manager@luatminhtu.vn\nbanlanhDao@luatminhtu.vn",
+                        key="rpt_to_emails",
+                        height=90,
+                    )
+                with ec2:
+                    cc_emails = st.text_area(
+                        "CC — mỗi dòng 1 email",
+                        placeholder="director@luatminhtu.vn",
+                        key="rpt_cc_emails",
+                        height=90,
+                    )
+                rpt_subject = st.text_input(
+                    "Tiêu đề email",
+                    value=f"[Báo cáo tuần] {TEN_CONG_TY} — {week_input}",
+                    key="rpt_subject",
+                )
+        else:
+            to_emails   = st.session_state.get(f"gemail_{nd['ten_tk']}", "")
+            cc_emails   = ""
+            rpt_subject = f"[Báo cáo tuần] Công việc của tôi — {week_input}"
+
+        # Nút tạo báo cáo
+        rpt_c1, rpt_c2, rpt_c3 = st.columns([1, 1, 3])
+        with rpt_c1:
+            gen_btn = st.button("🤖 Tạo báo cáo AI", type="primary",
+                                use_container_width=True, key="rpt_gen")
+        with rpt_c2:
+            send_btn_disabled = not bool(st.session_state.mtl_rpt_text.strip())
+            send_btn = st.button(
+                "📤 Gửi Gmail",
+                use_container_width=True,
+                disabled=send_btn_disabled,
+                key="rpt_send",
+            )
+
+        # Tạo báo cáo
+        if gen_btn or _auto_triggered:
+            if not week_tasks_rpt and not _auto_triggered:
+                st.warning("Không có task nào trong tuần được chọn.")
+            else:
+                with st.spinner("🤖 Claude đang tổng hợp báo cáo..."):
+                    # Nếu không phải admin, lọc task của mình
+                    tasks_for_rpt = week_tasks_rpt if is_admin else [
+                        t for t in week_tasks_rpt if t.get("assignee") == nd["ten_tk"]
+                    ]
+                    rpt_text = tao_bao_cao_tuan(week_input, tasks_for_rpt)
+                    st.session_state.mtl_rpt_text = rpt_text
+                st.success("✅ Đã tạo báo cáo!")
+                if _auto_triggered:
+                    # Tự động gửi luôn
+                    to_list  = [e.strip() for e in to_emails.splitlines() if e.strip()] if is_admin else [to_emails]
+                    cc_list  = [e.strip() for e in cc_emails.splitlines() if e.strip()] if is_admin else []
+                    ok, err  = gui_bao_cao_gmail(to_list, cc_list, rpt_subject, rpt_text)
+                    if ok:
+                        st.session_state.mtl_last_sent_week = _cur_wk
+                        st.success(f"✅ Đã tự động gửi đến {', '.join(to_list)}")
+                    else:
+                        st.error(f"❌ Gửi thất bại: {err}")
+                st.rerun()
+
+        # Gửi thủ công
+        if send_btn:
+            if not _gmail_service():
+                st.error("❌ Chưa kết nối Gmail. Đăng nhập Google ở thanh bên trước.")
+            else:
+                to_list = [e.strip() for e in to_emails.splitlines() if e.strip()] if is_admin else [to_emails]
+                cc_list = [e.strip() for e in cc_emails.splitlines() if e.strip()] if is_admin else []
+                if not any(to_list):
+                    st.error("Hãy nhập ít nhất 1 email nhận chính (TO).")
+                else:
+                    with st.spinner("📤 Đang gửi..."):
+                        ok, err = gui_bao_cao_gmail(
+                            to_list, cc_list, rpt_subject,
+                            st.session_state.mtl_rpt_text,
+                        )
+                    if ok:
+                        st.session_state.mtl_last_sent_week = week_input
+                        st.success(
+                            f"✅ Đã gửi đến: **{', '.join(to_list)}**"
+                            + (f" (CC: {', '.join(cc_list)})" if cc_list else "")
+                        )
+                    else:
+                        st.error(f"❌ Gửi thất bại: {err}")
+
+        # Hiển thị nội dung báo cáo
+        if st.session_state.mtl_rpt_text:
+            st.markdown("#### 📊 Nội dung báo cáo")
+            rpt_edit = st.text_area(
+                "Chỉnh sửa trước khi gửi (tùy chọn)",
+                value=st.session_state.mtl_rpt_text,
+                height=380,
+                key="rpt_edit_area",
+            )
+            st.session_state.mtl_rpt_text = rpt_edit
+
+            # Export Word
+            if rpt_edit.strip():
+                wb_rpt = tao_file_word(
+                    f"BÁO CÁO TUẦN {week_input}",
+                    rpt_edit,
+                    nd["ho_ten"],
+                    nd["chuc_vu"],
+                )
+                st.download_button(
+                    "⬇️ Xuất Word",
+                    data=wb_rpt,
+                    file_name=f"BaoCaoTuan_{week_input.replace('-','_')}_{datetime.now().strftime('%d%m%Y')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+
+        # Trạng thái gửi tuần hiện tại
+        st.markdown("---")
+        last_sent = st.session_state.mtl_last_sent_week
+        if last_sent:
+            st.markdown(
+                f"<div style='background:#eaf3de;border:1px solid #c0dd97;border-radius:8px;"
+                f"padding:8px 12px;font-size:0.82rem;color:#27500a;'>"
+                f"✅ Tuần <strong>{last_sent}</strong> đã gửi báo cáo thành công.</div>",
+                unsafe_allow_html=True,
+            )
+        next_thu = _now + timedelta(days=(3 - _now.weekday()) % 7)
+        st.caption(
+            f"⏱ Gửi tự động tiếp theo: Thứ 5 {next_thu.strftime('%d/%m/%Y')} lúc 20:00 | "
+            f"Hiện tại: {_now.strftime('%A %d/%m %H:%M')}"
+        )
