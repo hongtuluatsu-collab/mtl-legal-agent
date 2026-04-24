@@ -196,12 +196,16 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     background: linear-gradient(135deg, {MTL_NAVY2} 0%, {MTL_NAVY} 70%, #1a5592 100%);
     border-bottom: 3px solid {MTL_GOLD};
     border-radius: 12px;
-    margin-bottom: 24px;
+    margin-bottom: 16px;
     overflow: hidden;
     box-shadow: 0 4px 20px rgba(30,77,130,0.25);
 }}
 .mtl-header-inner {{
-    display: flex; align-items: center; gap: 20px; padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 22px 32px;
+    min-height: 90px;
 }}
 .mtl-box {{
     width: 40px; height: 40px; border-radius: 6px;
@@ -949,40 +953,40 @@ st.markdown(f"""
 <!-- Thanh giá trị cốt lõi -->
 <div style="background:linear-gradient(90deg,{MTL_NAVY2} 0%,#122d50 100%);
 border-bottom:2px solid {MTL_GOLD}44;
-padding:7px 28px;margin-top:-4px;margin-bottom:8px;
-display:flex;align-items:center;justify-content:center;gap:0;">
+padding:10px 32px;margin-bottom:8px;
+display:flex;align-items:center;justify-content:center;min-height:48px;">
 
-  <div style="display:flex;align-items:center;gap:8px;padding:0 24px;
+  <div style="display:flex;align-items:center;gap:10px;padding:0 32px;
   border-right:1px solid {MTL_GOLD}40;">
-    <span style="font-size:1rem;">🤝</span>
-    <div>
-      <div style="font-size:0.7rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;line-height:1;">Cam kết</div>
-      <div style="font-size:0.6rem;color:rgba(201,169,110,0.6);margin-top:1px;">Tận tâm phục vụ đến cùng</div>
+    <span style="font-size:1.1rem;line-height:1;">🤝</span>
+    <div style="display:flex;flex-direction:column;justify-content:center;">
+      <div style="font-size:0.72rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;line-height:1.2;">Cam kết</div>
+      <div style="font-size:0.62rem;color:rgba(201,169,110,0.65);margin-top:2px;line-height:1.3;">Tận tâm phục vụ đến cùng</div>
     </div>
   </div>
 
-  <div style="display:flex;align-items:center;gap:8px;padding:0 24px;
+  <div style="display:flex;align-items:center;gap:10px;padding:0 32px;
   border-right:1px solid {MTL_GOLD}40;">
-    <span style="font-size:1rem;">⚖️</span>
-    <div>
-      <div style="font-size:0.7rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;line-height:1;">Chính trực</div>
-      <div style="font-size:0.6rem;color:rgba(201,169,110,0.6);margin-top:1px;">Minh bạch & đạo đức nghề nghiệp</div>
+    <span style="font-size:1.1rem;line-height:1;">⚖️</span>
+    <div style="display:flex;flex-direction:column;justify-content:center;">
+      <div style="font-size:0.72rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;line-height:1.2;">Chính trực</div>
+      <div style="font-size:0.62rem;color:rgba(201,169,110,0.65);margin-top:2px;line-height:1.3;">Minh bạch & đạo đức nghề nghiệp</div>
     </div>
   </div>
 
-  <div style="display:flex;align-items:center;gap:8px;padding:0 24px;">
-    <span style="font-size:1rem;">📚</span>
-    <div>
-      <div style="font-size:0.7rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;line-height:1;">Học hỏi</div>
-      <div style="font-size:0.6rem;color:rgba(201,169,110,0.6);margin-top:1px;">Không ngừng trau dồi kiến thức</div>
+  <div style="display:flex;align-items:center;gap:10px;padding:0 32px;">
+    <span style="font-size:1.1rem;line-height:1;">📚</span>
+    <div style="display:flex;flex-direction:column;justify-content:center;">
+      <div style="font-size:0.72rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;line-height:1.2;">Học hỏi</div>
+      <div style="font-size:0.62rem;color:rgba(201,169,110,0.65);margin-top:2px;line-height:1.3;">Không ngừng trau dồi kiến thức</div>
     </div>
   </div>
 
-  <div style="margin-left:auto;font-size:0.6rem;color:rgba(201,169,110,0.4);
-  font-style:italic;white-space:nowrap;">OUR EXPERIENCE IS YOUR SUCCESS</div>
+  <div style="margin-left:auto;font-size:0.62rem;color:rgba(201,169,110,0.45);
+  font-style:italic;white-space:nowrap;letter-spacing:0.5px;">OUR EXPERIENCE IS YOUR SUCCESS</div>
 </div>
 """, unsafe_allow_html=True)
 
