@@ -329,63 +329,70 @@ if not st.session_state.dang_nhap:
 """, unsafe_allow_html=True)
     st.stop()
 
-# ── Nút thu/mở sidebar — tạo thẳng vào parent document qua stc.html ──
+# ── Nút thu/mở sidebar ──
 stc.html(f"""
 <script>
 (function(){{
   var P=window.parent, D=P.document;
-  var LS='mtl7', H=false;
+  var LS='mtl8';
 
-  // Xoá nút cũ nếu còn sót
-  var old=D.getElementById('mtl-t');
-  if(old) old.remove();
+  // Xoá nút và style cũ từ các lần rerun trước
+  ['mtl-t','mtl-s'].forEach(function(id){{
+    var el=D.getElementById(id); if(el) el.remove();
+  }});
 
-  // Tạo nút mới gắn thẳng vào body của trang chính
+  // Tạo style element để ẩn sidebar
+  var styleEl=D.createElement('style');
+  styleEl.id='mtl-s';
+  D.head.appendChild(styleEl);
+
+  // Tạo nút, gắn vào body trang chính
   var btn=D.createElement('div');
   btn.id='mtl-t';
-  btn.style.cssText='position:fixed;top:50%;left:0;transform:translateY(-50%);'
-    +'z-index:999999;width:24px;height:62px;background:{MTL_NAVY};'
+  btn.style.cssText='position:fixed;top:50%;left:0px;transform:translateY(-50%);'
+    +'z-index:2147483647;width:24px;height:62px;background:{MTL_NAVY};'
     +'border:2px solid {MTL_GOLD};border-left:none;border-radius:0 10px 10px 0;'
     +'cursor:pointer;display:flex;align-items:center;justify-content:center;'
-    +'box-shadow:3px 0 10px rgba(0,0,0,.25);transition:width .15s,background .15s;';
-  btn.innerHTML='<span style="color:{MTL_GOLD};font-size:17px;font-weight:900;'
-    +'pointer-events:none;user-select:none;">&#8249;</span>';
-  btn.onmouseenter=function(){{btn.style.width='32px';btn.style.background='{MTL_GOLD}';btn.querySelector('span').style.color='white';}};
-  btn.onmouseleave=function(){{btn.style.width='24px';btn.style.background='{MTL_NAVY}';btn.querySelector('span').style.color='{MTL_GOLD}';}};
+    +'box-shadow:3px 0 10px rgba(0,0,0,.3);';
+  btn.innerHTML='<span style="color:{MTL_GOLD};font-size:18px;font-weight:900;'
+    +'pointer-events:none;user-select:none;line-height:1;">&#8249;</span>';
   D.body.appendChild(btn);
 
-  // Thẻ style để ẩn/hiện sidebar
-  var st=D.createElement('style');
-  st.id='mtl-s';
-  D.head.appendChild(st);
-
-  function sidebar(){{ return D.querySelector('section[data-testid="stSidebar"]'); }}
+  function sb(){{ return D.querySelector('section[data-testid="stSidebar"]'); }}
+  function hidden(){{ return localStorage.getItem(LS)==='1'; }}
 
   function apply(){{
-    st.textContent=H
-      ?'section[data-testid="stSidebar"]{{width:0!important;min-width:0!important;overflow:hidden!important;visibility:hidden!important;opacity:0!important;}}'
-      :'';
-    var sb=sidebar(), w=(!H&&sb)?sb.getBoundingClientRect().width:0;
-    btn.style.left=(w>30?w:H?0:300)+'px';
-    btn.querySelector('span').innerHTML=H?'&#8250;':'&#8249;';
-    btn.title=H?'Mo thanh ben':'Thu thanh ben';
+    var h=hidden(), s=sb();
+    // Ẩn hoặc hiện sidebar
+    styleEl.textContent = h
+      ? 'section[data-testid="stSidebar"]{{display:none!important;}}'
+      : '';
+    // Cập nhật icon và vị trí nút
+    btn.querySelector('span').innerHTML = h ? '&#8250;' : '&#8249;';
+    btn.title = h ? 'Mo thanh ben' : 'Thu thanh ben';
+    if(h){{
+      btn.style.left='0px';
+    }}else{{
+      // Đợi sidebar render xong rồi đọc width
+      setTimeout(function(){{
+        var w=s?s.getBoundingClientRect().width:0;
+        btn.style.left=(w>10?w:300)+'px';
+      }},50);
+    }}
   }}
 
   btn.onclick=function(){{
-    H=!H;
-    localStorage.setItem(LS,H?'1':'0');
+    localStorage.setItem(LS, hidden()?'0':'1');
     apply();
-    setTimeout(apply,350);
   }};
 
-  // Khởi động
-  H=localStorage.getItem(LS)==='1';
+  // Khởi động sau khi sidebar sẵn sàng
   function init(){{
-    if(!sidebar()){{setTimeout(init,300);return;}}
+    if(!sb()){{setTimeout(init,300);return;}}
     apply();
-    setInterval(apply,1200);
+    setInterval(apply,1500);
   }}
-  setTimeout(init,800);
+  setTimeout(init,1000);
 }})();
 </script>
 """, height=0)
