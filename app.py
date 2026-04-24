@@ -118,6 +118,12 @@ st.markdown(f"""
 #MainMenu, footer, header {{ visibility: hidden; }}
 
 section[data-testid="stSidebar"] {{
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 21rem !important;
+    min-width: 21rem !important;
+    transform: none !important;
     background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%);
     border-right: 2px solid {MTL_GOLD};
 }}
