@@ -18,13 +18,14 @@ import io
 import os
 import re
 import json
-import imaplib
-import smtplib
-import email as email_lib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.header import decode_header
 from datetime import datetime
+
+# OAuth + Gmail API
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+import urllib.parse
 from docx import Document
 from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -677,69 +678,141 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
     if st.button("🚪 Đăng xuất", use_container_width=True):
         dang_xuat()
 
-    # ── KẾT NỐI GMAIL CÁ NHÂN ──
+    # ── GMAIL OAuth ──────────────────────────────
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:12px 0;'></div>",
                 unsafe_allow_html=True)
     st.markdown(
         f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;"
-        f"text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📧 Gmail cá nhân</div>",
+        f"text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📧 Gmail</div>",
         unsafe_allow_html=True,
     )
 
-    # Khoá session theo từng luật sư
-    _gk = f"gmail_{nd['ten_tk']}"   # vd: gmail_ls.hoang
-    _pk = f"gpass_{nd['ten_tk']}"
-    _ck = f"gconn_{nd['ten_tk']}"   # đã kết nối chưa
+    # Khoá session theo từng luật sư để tách biệt hoàn toàn
+    _cred_key = f"gcred_{nd['ten_tk']}"
 
-    gmail_user = st.text_input(
-        "Địa chỉ Gmail",
-        key=f"si_guser_{nd['ten_tk']}",
-        value=st.session_state.get(_gk, ""),
-        placeholder="ten@gmail.com",
-    )
-    gmail_pass = st.text_input(
-        "App Password",
-        key=f"si_gpass_{nd['ten_tk']}",
-        value=st.session_state.get(_pk, ""),
-        type="password",
-        placeholder="xxxx xxxx xxxx xxxx",
-        help="Vào myaccount.google.com → Bảo mật → Mật khẩu ứng dụng",
-    )
+    def _get_creds():
+        """Lấy credentials đã lưu của luật sư này."""
+        return st.session_state.get(_cred_key)
 
-    if st.button("🔗 Kết nối Gmail", use_container_width=True, key=f"si_conn_{nd['ten_tk']}"):
-        if gmail_user and gmail_pass:
-            with st.spinner("Đang xác thực..."):
-                try:
-                    _m = imaplib.IMAP4_SSL("imap.gmail.com", timeout=10)
-                    _m.login(gmail_user, gmail_pass)
-                    _m.logout()
-                    st.session_state[_gk] = gmail_user
-                    st.session_state[_pk] = gmail_pass
-                    st.session_state[_ck] = True
-                    st.success("✅ Kết nối thành công!")
-                    st.rerun()
-                except imaplib.IMAP4.error:
-                    st.session_state[_ck] = False
-                    st.error("❌ Sai mật khẩu hoặc chưa bật App Password")
-                except Exception as e:
-                    st.session_state[_ck] = False
-                    st.error(f"❌ Lỗi: {e}")
-        else:
-            st.warning("Điền đủ Gmail và App Password")
+    def _is_connected():
+        c = _get_creds()
+        if not c:
+            return False
+        # Tự refresh token nếu hết hạn
+        if c.expired and c.refresh_token:
+            try:
+                c.refresh(Request())
+                st.session_state[_cred_key] = c
+            except Exception:
+                return False
+        return c.valid
 
-    if st.session_state.get(_ck):
+    # Đọc cấu hình OAuth từ Railway env vars
+    _CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+    _CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    _APP_URL       = os.environ.get("APP_URL", "http://localhost:8501")
+    _SCOPES        = [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid",
+    ]
+
+    _oauth_ready = bool(_CLIENT_ID and _CLIENT_SECRET)
+
+    if not _oauth_ready:
+        st.markdown(
+            "<div style='background:rgba(220,80,80,0.15);border:1px solid #c04040;"
+            "border-radius:8px;padding:8px 10px;font-size:0.75rem;color:#ff9090;'>"
+            "⚠️ Chưa cấu hình OAuth<br>Thêm GOOGLE_CLIENT_ID và<br>"
+            "GOOGLE_CLIENT_SECRET vào Railway</div>",
+            unsafe_allow_html=True,
+        )
+    elif _is_connected():
+        c = _get_creds()
+        # Lấy email từ userinfo
+        _email_disp = st.session_state.get(f"gemail_{nd['ten_tk']}", "Gmail đã kết nối")
         st.markdown(
             f"<div style='background:rgba(100,180,100,0.15);border:1px solid #4a9a4a;"
-            f"border-radius:8px;padding:6px 10px;font-size:0.78rem;color:#90ee90;margin-top:4px;'>"
-            f"✅ {st.session_state.get(_gk,'')}</div>",
+            f"border-radius:8px;padding:8px 10px;font-size:0.78rem;color:#90ee90;'>"
+            f"✅ {_email_disp}</div>",
             unsafe_allow_html=True,
         )
+        if st.button("↩ Ngắt kết nối Gmail", use_container_width=True,
+                     key=f"gdisconn_{nd['ten_tk']}"):
+            st.session_state.pop(_cred_key, None)
+            st.rerun()
     else:
-        st.markdown(
-            "<div style='font-size:0.72rem;color:#aaa;margin-top:4px;'>"
-            "Cần App Password — không phải mật khẩu Gmail thường</div>",
-            unsafe_allow_html=True,
-        )
+        # Kiểm tra có code OAuth callback không
+        _qp = st.query_params
+        _code  = _qp.get("code", "")
+        _state = _qp.get("state", "")
+
+        if _code and _state == nd["ten_tk"]:
+            # Nhận được code → đổi lấy token
+            try:
+                _flow = Flow.from_client_config(
+                    {"web": {
+                        "client_id": _CLIENT_ID,
+                        "client_secret": _CLIENT_SECRET,
+                        "redirect_uris": [_APP_URL],
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }},
+                    scopes=_SCOPES,
+                    redirect_uri=_APP_URL,
+                )
+                _flow.fetch_token(code=_code)
+                _creds = _flow.credentials
+                st.session_state[_cred_key] = _creds
+
+                # Lấy email để hiển thị
+                try:
+                    _svc = build("oauth2", "v2", credentials=_creds)
+                    _info = _svc.userinfo().get().execute()
+                    st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
+                except Exception:
+                    pass
+
+                # Xoá query params
+                st.query_params.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Lỗi xác thực: {e}")
+        else:
+            # Tạo URL đăng nhập Google
+            _flow = Flow.from_client_config(
+                {"web": {
+                    "client_id": _CLIENT_ID,
+                    "client_secret": _CLIENT_SECRET,
+                    "redirect_uris": [_APP_URL],
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }},
+                scopes=_SCOPES,
+                redirect_uri=_APP_URL,
+            )
+            _auth_url, _ = _flow.authorization_url(
+                access_type="offline",
+                include_granted_scopes="true",
+                prompt="consent",
+                state=nd["ten_tk"],   # dùng tên tài khoản để phân biệt luật sư
+            )
+            st.markdown(
+                f'<a href="{_auth_url}" target="_self">'
+                f'<button style="width:100%;background:#4285F4;color:white;border:none;'
+                f'border-radius:8px;padding:9px;font-size:0.85rem;font-weight:600;'
+                f'cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">'
+                f'<svg width="18" height="18" viewBox="0 0 48 48">'
+                f'<path fill="#fff" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>'
+                f'</svg>Đăng nhập với Google</button></a>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                "<div style='font-size:0.71rem;color:#aaa;margin-top:5px;text-align:center;'>"
+                "Dùng mật khẩu Gmail thông thường</div>",
+                unsafe_allow_html=True,
+            )
 
 # ── HEADER ──
 st.markdown(f"""
@@ -960,218 +1033,164 @@ Thay `sk-ant-` bằng key thật của bạn. Lấy key tại: **console.anthrop
 #  TAB 5 — EMAIL INTELLIGENCE
 # ══════════════════════════════════════════════
 
-# ── Helpers lấy credentials của luật sư đang đăng nhập ──
-def _gmail_creds():
-    """Trả về (gmail, password) của luật sư hiện tại, hoặc (None, None)."""
-    u = nd["ten_tk"]
-    return st.session_state.get(f"gmail_{u}"), st.session_state.get(f"gpass_{u}")
+# ── Gmail API helpers ──────────────────────────────────────────
+def _gmail_service():
+    """Trả về Gmail service của luật sư đang đăng nhập."""
+    creds = st.session_state.get(f"gcred_{nd['ten_tk']}")
+    if not creds or not creds.valid:
+        return None
+    return build("gmail", "v1", credentials=creds)
 
-def _gmail_connected():
-    return bool(st.session_state.get(f"gconn_{nd['ten_tk']}"))
 
-
-# ── Đọc email qua IMAP ──
-def tai_email_imap(so_luong: int = 10) -> list:
-    gmail, gpass = _gmail_creds()
-    if not gmail or not gpass:
+def tai_email_gmail_api(so_luong: int = 12) -> list:
+    """Tải email từ Gmail qua API."""
+    svc = _gmail_service()
+    if not svc:
         return []
     try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
-        mail.login(gmail, gpass)
-        mail.select("INBOX")
-        _, data = mail.search(None, "ALL")
-        ids = data[0].split()
-        ids = ids[-so_luong:]          # n email mới nhất
-
+        resp = svc.users().messages().list(
+            userId="me", maxResults=so_luong, labelIds=["INBOX"]
+        ).execute()
+        msgs = resp.get("messages", [])
         results = []
-        for eid in reversed(ids):
-            _, msg_data = mail.fetch(eid, "(RFC822 FLAGS)")
-            raw = msg_data[0][1]
-            flags = msg_data[0][0].decode()
-            msg = email_lib.message_from_bytes(raw)
+        for m in msgs:
+            full = svc.users().messages().get(
+                userId="me", id=m["id"], format="full"
+            ).execute()
+            headers = {h["name"]: h["value"] for h in full["payload"]["headers"]}
+            subject = headers.get("Subject", "(Không có tiêu đề)")
+            from_   = headers.get("From", "")
+            date_   = headers.get("Date", "")[:22]
 
-            # Giải mã subject
-            subj_raw = decode_header(msg.get("Subject", "(Không có tiêu đề)"))[0]
-            if isinstance(subj_raw[0], bytes):
-                subject = subj_raw[0].decode(subj_raw[1] or "utf-8", errors="ignore")
-            else:
-                subject = subj_raw[0] or ""
-
-            # Giải mã sender
-            from_raw = msg.get("From", "")
-            m = re.match(r'"?(.+?)"?\s*<(.+?)>', from_raw)
-            from_name  = m.group(1).strip() if m else from_raw
-            from_email = m.group(2).strip() if m else from_raw
+            # Parse sender
+            _m = re.match(r'"?(.+?)"?\s*<(.+?)>', from_)
+            from_name  = _m.group(1).strip() if _m else from_
+            from_email = _m.group(2).strip() if _m else from_
 
             # Lấy text body
-            body = ""
-            if msg.is_multipart():
-                for part in msg.walk():
-                    ct = part.get_content_type()
-                    cd = str(part.get("Content-Disposition", ""))
-                    if ct == "text/plain" and "attachment" not in cd:
-                        raw_bytes = part.get_payload(decode=True)
-                        if raw_bytes:
-                            body = raw_bytes.decode(
-                                part.get_content_charset() or "utf-8", errors="ignore"
-                            )
-                        break
-            else:
-                raw_bytes = msg.get_payload(decode=True)
-                if raw_bytes:
-                    body = raw_bytes.decode(
-                        msg.get_content_charset() or "utf-8", errors="ignore"
-                    )
+            body = _extract_body(full["payload"])
 
-            # Ngày
-            date_str = msg.get("Date", "")[:22].strip()
-
+            unread = "UNREAD" in full.get("labelIds", [])
             results.append({
-                "id":        eid.decode(),
+                "id":        m["id"],
                 "fromName":  from_name,
                 "fromEmail": from_email,
                 "subject":   subject,
-                "date":      date_str,
+                "date":      date_,
                 "body":      body[:4000],
-                "unread":    "\\Seen" not in flags,
+                "unread":    unread,
             })
-
-        mail.close()
-        mail.logout()
         return results
-
-    except imaplib.IMAP4.error as e:
-        st.error(f"IMAP lỗi: {e}")
-        return []
     except Exception as e:
-        st.error(f"Lỗi kết nối Gmail: {e}")
+        st.error(f"Gmail API lỗi: {e}")
         return []
 
 
-# ── Gửi email qua SMTP ──
-def gui_email_smtp(to: str, subject: str, body: str) -> bool:
-    gmail, gpass = _gmail_creds()
-    if not gmail or not gpass:
+def _extract_body(payload: dict) -> str:
+    """Lấy nội dung text/plain từ payload email."""
+    if payload.get("mimeType") == "text/plain":
+        data = payload.get("body", {}).get("data", "")
+        if data:
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+    for part in payload.get("parts", []):
+        result = _extract_body(part)
+        if result:
+            return result
+    return ""
+
+
+def gui_email_gmail_api(to: str, subject: str, body: str) -> bool:
+    """Gửi email reply qua Gmail API."""
+    svc = _gmail_service()
+    if not svc:
         return False
     try:
-        msg = MIMEMultipart("alternative")
-        msg["From"]    = gmail
+        import email as email_lib
+        from email.mime.text import MIMEText
+        msg = MIMEText(body, "plain", "utf-8")
+        sender = st.session_state.get(f"gemail_{nd['ten_tk']}", "me")
+        msg["From"]    = sender
         msg["To"]      = to
         msg["Subject"] = f"Re: {subject}"
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(gmail, gpass)
-            server.send_message(msg)
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        svc.users().messages().send(
+            userId="me", body={"raw": raw}
+        ).execute()
         return True
     except Exception as e:
-        st.error(f"SMTP lỗi: {e}")
+        st.error(f"Gửi email lỗi: {e}")
         return False
 
 
-# ── Phân tích pháp lý — tái sử dụng goi_claude() ──
+# ── AI helpers — tái sử dụng goi_claude() ──────────────────────
 def phan_tich_email_phap_ly(email: dict) -> dict:
-    system = f"""Bạn là trợ lý pháp lý chuyên nghiệp tại {TEN_CONG_TY}.
-Phân tích email và trả về JSON thuần (không markdown, không preamble)."""
-    prompt = f"""Phân tích và trả về đúng JSON schema:
+    system = f"Bạn là trợ lý pháp lý tại {TEN_CONG_TY}. Trả về JSON thuần, không markdown."
+    prompt = f"""Phân tích email và trả về đúng JSON:
 {{
-  "urgency": "high | medium | low",
-  "urgency_score": 0-100,
-  "urgency_reason": "lý do ngắn",
-  "category": "loại vụ việc pháp lý",
+  "urgency": "high|medium|low", "urgency_score": 0-100,
+  "urgency_reason": "lý do", "category": "loại vụ việc",
   "summary": "tóm tắt 1-2 câu",
-  "legal_issues": ["vấn đề 1", "vấn đề 2"],
-  "relevant_laws": ["Luật 1", "Luật 2"],
-  "parties": [{{"role": "vai trò", "name": "tên"}}],
-  "action_items": ["việc cần làm 1", "việc cần làm 2"],
-  "deadline": "mô tả thời hạn hoặc null",
-  "risk_level": "Cao | Trung bình | Thấp"
+  "legal_issues": ["vấn đề 1","vấn đề 2"],
+  "relevant_laws": ["Luật 1","Luật 2"],
+  "parties": [{{"role":"vai trò","name":"tên"}}],
+  "action_items": ["việc 1","việc 2"],
+  "deadline": "thời hạn hoặc null",
+  "risk_level": "Cao|Trung bình|Thấp"
 }}
-
 Tiêu đề: {email.get('subject','')}
-Người gửi: {email.get('fromName','')} <{email.get('fromEmail','')}>
+Từ: {email.get('fromName','')} <{email.get('fromEmail','')}>
 Nội dung:\n{email.get('body','')[:3000]}"""
-    text = goi_claude([{"role": "user", "content": prompt}], system)
+    text = goi_claude([{"role":"user","content":prompt}], system)
     try:
-        clean = text.replace("```json","").replace("```","").strip()
-        return json.loads(clean)
+        return json.loads(text.replace("```json","").replace("```","").strip())
     except Exception:
         return {}
 
 
-# ── Soạn phản hồi — tái sử dụng goi_claude() ──
 def soan_phan_hoi(email: dict, analysis: dict, tone: str) -> str:
     tone_map = {
         "formal":   "trang trọng, văn phong luật sư chuyên nghiệp",
         "friendly": "thân thiện, gần gũi nhưng vẫn chuyên nghiệp",
-        "firm":     "kiên quyết, rõ ràng, thể hiện quyền hạn pháp lý",
+        "firm":     "kiên quyết, rõ ràng, thể hiện quyền hạn",
         "urgent":   "khẩn cấp, nhấn mạnh cần hành động ngay",
     }
     ctx = ""
     if analysis:
         ctx = (f"\nPhân tích: {analysis.get('summary','')}\n"
                f"Hành động: {'; '.join(analysis.get('action_items',[]))}")
-    system = f"Bạn là luật sư tại {TEN_CONG_TY}. Soạn email phản hồi tiếng Việt."
-    prompt = (f"Giọng: {tone_map.get(tone,'trang trọng')}. "
+    system = f"Bạn là luật sư tại {TEN_CONG_TY}."
+    prompt = (f"Soạn email phản hồi tiếng Việt, giọng {tone_map.get(tone,'trang trọng')}. "
               f"Bắt đầu 'Kính gửi...', KHÔNG viết subject, xác nhận nhận email, "
               f"nêu hướng xử lý, đề xuất bước tiếp theo. "
               f"Ký tên: {nd['ho_ten']} — {TEN_CONG_TY}{ctx}\n\n"
               f"Tiêu đề: {email.get('subject','')}\n"
               f"Từ: {email.get('fromName','')}\n"
               f"Nội dung:\n{email.get('body','')[:2000]}")
-    return goi_claude([{"role": "user", "content": prompt}], system)
+    return goi_claude([{"role":"user","content":prompt}], system)
 
 
-# ── Gắn tag tự động ──
 def gan_tag(email: dict) -> list:
     text = f"{email.get('subject','')} {email.get('body','')}".lower()
     rules = {
-        "🔴 Khẩn":       ["khẩn","gấp","ngay","hôm nay","vi phạm","khởi kiện"],
-        "🟡 Hợp đồng":   ["hợp đồng","ký kết","điều khoản","soát xét","contract"],
-        "🟣 Tranh chấp": ["tranh chấp","kiện","tòa án","bồi thường","khiếu nại"],
-        "🟢 Tư vấn":     ["tư vấn","hỏi","thành lập","startup","cần giải đáp"],
+        "🔴 Khẩn":       ["khẩn","gấp","ngay","vi phạm","khởi kiện"],
+        "🟡 Hợp đồng":   ["hợp đồng","ký kết","điều khoản","soát xét"],
+        "🟣 Tranh chấp": ["tranh chấp","kiện","tòa án","bồi thường"],
+        "🟢 Tư vấn":     ["tư vấn","hỏi","thành lập","startup"],
     }
     tags = [t for t, kws in rules.items() if any(k in text for k in kws)]
     return tags if tags else ["🔵 Thông thường"]
 
 
-# ── Dữ liệu mẫu khi chưa kết nối ──
 EMAIL_MAU = [
-    {
-        "id":"m1","unread":True,"fromName":"Nguyễn Văn Minh",
-        "fromEmail":"nvminh@vietcorp.vn","date":"09:42",
-        "subject":"Tranh chấp hợp đồng mua bán căn hộ — cần tư vấn khẩn",
-        "body":(
-            "Kính gửi Luật sư,\n\nTôi đã ký hợp đồng mua căn hộ tại dự án Green Valley "
-            "ngày 15/03/2024, giá trị 3,2 tỷ đồng. Chủ đầu tư vi phạm nghiêm trọng:\n"
-            "1. Trễ bàn giao 8 tháng (hạn 15/11/2024)\n"
-            "2. Từ chối trả phạt điều 9 (0.05%/ngày)\n"
-            "3. Đơn phương thay đổi thiết kế\n\n"
-            "Cần tư vấn khẩn.\n\nTrân trọng,\nNguyễn Văn Minh — 0912 345 678"
-        ),
-    },
-    {
-        "id":"m2","unread":True,"fromName":"Trần Thị Hà",
-        "fromEmail":"ttha@mfg.com.vn","date":"Hôm qua",
-        "subject":"Soát xét hợp đồng phân phối độc quyền 5M USD",
-        "body":(
-            "Luật sư kính mến,\n\nChuẩn bị ký hợp đồng phân phối độc quyền với "
-            "Korea Tech Co., Ltd., giá trị 5 triệu USD/năm.\n"
-            "Cần soát xét Điều 6, 12, 15 và Phụ lục A.\n"
-            "Hạn ký: 30/04/2025.\n\nTrân trọng,\nTrần Thị Hà — GĐ Pháp chế"
-        ),
-    },
-    {
-        "id":"m3","unread":False,"fromName":"Phạm Quốc Bảo",
-        "fromEmail":"pqbao@startup.io","date":"20/04",
-        "subject":"Tư vấn thành lập startup FinTech P2P Lending",
-        "body":(
-            "Kính gửi Văn phòng Luật Minh Tú,\n\n"
-            "Tôi đang thành lập startup FinTech (P2P Lending), cần tư vấn:\n"
-            "1. Hình thức pháp nhân  2. Cấu trúc vốn Seed  3. NĐ 52/2021\n\n"
-            "Ngân sách: 50-80tr VNĐ.\n\nTrân trọng, Phạm Quốc Bảo"
-        ),
-    },
+    {"id":"m1","unread":True,"fromName":"Nguyễn Văn Minh","fromEmail":"nvminh@vietcorp.vn",
+     "date":"09:42","subject":"Tranh chấp hợp đồng mua bán căn hộ — cần tư vấn khẩn",
+     "body":"Kính gửi Luật sư,\n\nTôi đã ký hợp đồng mua căn hộ tại dự án Green Valley ngày 15/03/2024, giá trị 3,2 tỷ đồng. Chủ đầu tư vi phạm:\n1. Trễ bàn giao 8 tháng\n2. Từ chối trả phạt điều 9 (0.05%/ngày)\n3. Đơn phương thay đổi thiết kế\n\nCần tư vấn khẩn.\n\nTrân trọng,\nNguyễn Văn Minh"},
+    {"id":"m2","unread":True,"fromName":"Trần Thị Hà","fromEmail":"ttha@mfg.com.vn",
+     "date":"Hôm qua","subject":"Soát xét hợp đồng phân phối độc quyền 5M USD",
+     "body":"Luật sư kính mến,\n\nChuẩn bị ký hợp đồng phân phối với Korea Tech Co., Ltd., giá trị 5M USD/năm. Cần soát xét Điều 6, 12, 15 và Phụ lục A.\nHạn ký: 30/04/2025.\n\nTrân trọng,\nTrần Thị Hà"},
+    {"id":"m3","unread":False,"fromName":"Phạm Quốc Bảo","fromEmail":"pqbao@startup.io",
+     "date":"20/04","subject":"Tư vấn thành lập startup FinTech P2P Lending",
+     "body":"Kính gửi Văn phòng Luật Minh Tú,\n\nCần tư vấn thành lập startup FinTech (P2P Lending):\n1. Hình thức pháp nhân\n2. Cấu trúc vốn Seed từ Singapore\n3. NĐ 52/2021\n\nNgân sách: 50-80tr.\n\nTrân trọng, Phạm Quốc Bảo"},
 ]
 
 
@@ -1179,27 +1198,25 @@ EMAIL_MAU = [
 #  RENDER TAB 5
 # ══════════════════════════════════════════════
 with tab5:
-
-    # Khởi tạo session state
     for _k, _v in {
-        "ei_emails":   [],
-        "ei_selected": None,
-        "ei_analysis": None,
-        "ei_draft":    "",
-        "ei_tone":     "formal",
-        "ei_sent":     [],
+        "ei_emails":[], "ei_selected":None,
+        "ei_analysis":None, "ei_draft":"",
+        "ei_tone":"formal", "ei_sent":[],
     }.items():
         if _k not in st.session_state:
             st.session_state[_k] = _v
 
-    # ── Banner ──
-    _conn = _gmail_connected()
-    _gml, _ = _gmail_creds()
-    _status_html = (
-        f"<span style='color:#90ee90;font-size:0.8rem;'>✅ {_gml}</span>"
-        if _conn else
-        "<span style='color:#ffa07a;font-size:0.8rem;'>⚠️ Chưa kết nối — nhập Gmail ở thanh bên</span>"
+    # Kiểm tra kết nối
+    _connected = bool(
+        st.session_state.get(f"gcred_{nd['ten_tk']}") and
+        st.session_state.get(f"gcred_{nd['ten_tk']}").valid
     )
+    _gmail_addr = st.session_state.get(f"gemail_{nd['ten_tk']}", "")
+
+    # Banner
+    _status = (f"<span style='color:#90ee90;'>✅ {_gmail_addr}</span>"
+               if _connected else
+               "<span style='color:#ffa07a;'>⚠️ Chưa kết nối — nhấn nút Google ở thanh bên</span>")
     st.markdown(f"""
 <div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);
 border-radius:10px;padding:14px 20px;margin-bottom:18px;
@@ -1207,35 +1224,28 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
   <div>
     <span style="color:white;font-size:1.05rem;font-weight:700;">📧 Email Intelligence</span>
     <span style="color:{MTL_GOLD2};font-size:0.8rem;margin-left:12px;">
-      IMAP/SMTP · Phân tích pháp lý AI · Soạn thảo tự động
+      Gmail API · Phân tích pháp lý AI · Soạn thảo tự động
     </span>
   </div>
-  <div>{_status_html}</div>
+  <div>{_status}</div>
 </div>""", unsafe_allow_html=True)
 
-    # ── 3 cột chính ──
     col_inbox, col_email, col_ai = st.columns([1.2, 2, 1.8])
 
-    # ════════════════════════════════
-    # CỘT 1 — HỘP THƯ
-    # ════════════════════════════════
+    # ── CỘT 1: HỘP THƯ ──────────────────────
     with col_inbox:
-        st.markdown(
-            f"<div style='font-weight:700;color:{MTL_NAVY};margin-bottom:8px;'>📬 Hộp thư</div>",
-            unsafe_allow_html=True,
-        )
-
+        st.markdown(f"<div style='font-weight:700;color:{MTL_NAVY};margin-bottom:8px;'>📬 Hộp thư</div>",
+                    unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
             if st.button("↻ Tải email", use_container_width=True, key="ei_load"):
-                if not _conn:
-                    st.warning("Kết nối Gmail ở thanh bên trước")
+                if not _connected:
+                    st.warning("Đăng nhập Google ở thanh bên trước")
                 else:
-                    with st.spinner("Đang tải từ Gmail..."):
-                        emails = tai_email_imap(so_luong=12)
+                    with st.spinner("Đang tải..."):
+                        emails = tai_email_gmail_api(so_luong=12)
                     if emails:
                         st.session_state.ei_emails = emails
-                        st.success(f"✅ {len(emails)} email")
                         st.rerun()
                     else:
                         st.error("Không tải được email")
@@ -1246,11 +1256,9 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
 
         emails = st.session_state.ei_emails
         if not emails:
-            st.markdown(
-                "<div style='color:#aaa;font-size:0.82rem;text-align:center;"
-                "padding:24px 0;'>Kết nối Gmail → Tải email<br>hoặc nhấn Demo</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown("<div style='color:#aaa;font-size:0.82rem;text-align:center;"
+                        "padding:24px 0;'>Đăng nhập Gmail → Tải email<br>hoặc nhấn Demo</div>",
+                        unsafe_allow_html=True)
         else:
             chua_doc = sum(1 for e in emails if e.get("unread"))
             st.caption(f"{chua_doc} chưa đọc · {len(emails)} tổng")
@@ -1260,92 +1268,70 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                 tags   = gan_tag(em)
                 label  = ("🔵 " if em.get("unread") else "") + em["fromName"]
                 subj   = em["subject"][:36] + ("…" if len(em["subject"]) > 36 else "")
-                if st.button(
-                    f"{label}\n{' '.join(tags[:1])}  {subj}",
-                    key=f"ei_em_{em['id']}",
-                    use_container_width=True,
-                    type="primary" if is_sel else "secondary",
-                ):
+                if st.button(f"{label}\n{' '.join(tags[:1])}  {subj}",
+                             key=f"ei_em_{em['id']}", use_container_width=True,
+                             type="primary" if is_sel else "secondary"):
                     st.session_state.ei_selected = em
                     st.session_state.ei_analysis  = None
                     st.session_state.ei_draft     = ""
                     st.rerun()
 
-    # ════════════════════════════════
-    # CỘT 2 — NỘI DUNG EMAIL
-    # ════════════════════════════════
+    # ── CỘT 2: NỘI DUNG EMAIL ───────────────
     with col_email:
         em = st.session_state.ei_selected
         if em is None:
-            st.markdown(
-                "<div style='color:#aaa;text-align:center;padding:80px 0;font-size:0.9rem;'>"
-                "👈 Chọn email để xem</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown("<div style='color:#aaa;text-align:center;padding:80px 0;'>"
+                        "👈 Chọn email để xem</div>", unsafe_allow_html=True)
         else:
             st.markdown(
                 f"<div style='font-size:1rem;font-weight:700;color:{MTL_NAVY};"
                 f"border-bottom:2px solid {MTL_GOLD}44;padding-bottom:8px;margin-bottom:10px;'>"
-                f"{em['subject']}</div>",
-                unsafe_allow_html=True,
-            )
+                f"{em['subject']}</div>", unsafe_allow_html=True)
             m1, m2 = st.columns(2)
             m1.markdown(f"**Từ:** {em['fromName']}  \n`{em['fromEmail']}`")
             m2.markdown(f"**Lúc:** {em.get('date','')}")
-
             tags_html = " &nbsp;".join(
                 f"<span style='background:{MTL_NAVY}11;border:1px solid {MTL_NAVY}33;"
                 f"border-radius:4px;padding:2px 8px;font-size:0.75rem;'>{t}</span>"
-                for t in gan_tag(em)
-            )
+                for t in gan_tag(em))
             st.markdown(tags_html, unsafe_allow_html=True)
             st.divider()
-
-            # Body
             body_safe = em["body"].replace("<","&lt;").replace(">","&gt;")
             st.markdown(
                 f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;"
                 f"border-left:3px solid {MTL_NAVY};border-radius:0 8px 8px 0;"
                 f"padding:16px 18px;font-size:0.87rem;line-height:1.85;"
                 f"white-space:pre-wrap;max-height:360px;overflow-y:auto;'>"
-                f"{body_safe}</div>",
-                unsafe_allow_html=True,
-            )
+                f"{body_safe}</div>", unsafe_allow_html=True)
             st.divider()
-
             qa, qb, qc = st.columns(3)
             with qa:
-                if st.button("🔍 Phân tích AI", use_container_width=True, key="ei_btn_analyze"):
+                if st.button("🔍 Phân tích AI", use_container_width=True, key="ei_analyze"):
                     with st.spinner("Claude đang phân tích..."):
                         st.session_state.ei_analysis = phan_tich_email_phap_ly(em)
                     st.rerun()
             with qb:
-                if st.button("✦ Soạn thảo", use_container_width=True, key="ei_btn_draft"):
+                if st.button("✦ Soạn thảo", use_container_width=True, key="ei_draft_btn"):
                     with st.spinner("Claude đang soạn..."):
                         st.session_state.ei_draft = soan_phan_hoi(
-                            em, st.session_state.ei_analysis, st.session_state.ei_tone
-                        )
+                            em, st.session_state.ei_analysis, st.session_state.ei_tone)
                     st.rerun()
             with qc:
-                if st.button("📄 Tạo văn bản", use_container_width=True, key="ei_btn_doc"):
+                if st.button("📄 Tạo văn bản", use_container_width=True, key="ei_docbtn"):
                     a = st.session_state.ei_analysis
                     if a:
-                        nd_vb = (
-                            f"Vụ việc: {em['subject']}\nKhách hàng: {em['fromName']}\n\n"
-                            f"Tóm tắt: {a.get('summary','')}\n\n"
-                            f"Vấn đề pháp lý:\n" + "\n".join(f"- {i}" for i in a.get("legal_issues",[])) +
-                            f"\n\nHành động:\n" + "\n".join(f"{i+1}. {x}" for i,x in enumerate(a.get("action_items",[])))
-                        )
+                        nd_vb = (f"Vụ việc: {em['subject']}\nKhách hàng: {em['fromName']}\n\n"
+                                 f"Tóm tắt: {a.get('summary','')}\n\n"
+                                 f"Vấn đề pháp lý:\n" + "\n".join(f"- {i}" for i in a.get("legal_issues",[])) +
+                                 f"\n\nHành động:\n" + "\n".join(f"{i+1}. {x}" for i,x in enumerate(a.get("action_items",[]))))
                         vb = soan_don_tu("Thư tư vấn pháp lý", nd_vb)
                         st.session_state.van_ban_soan  = vb
                         st.session_state.loai_van_ban = "Thư tư vấn pháp lý"
-                        st.success("✅ Đã tạo — xem tại tab Soạn thảo văn bản")
+                        st.success("✅ Đã tạo — xem tab Soạn thảo văn bản")
                     else:
                         st.warning("Phân tích AI trước")
 
-    # ════════════════════════════════
-    # CỘT 3 — AI PANEL
-    # ════════════════════════════════
+    # ── CỘT 3: AI PANEL ─────────────────────
     with col_ai:
         if st.session_state.ei_selected is None:
             st.info("Chọn email để bắt đầu")
@@ -1353,15 +1339,11 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
             em = st.session_state.ei_selected
             ai1, ai2, ai3 = st.tabs(["🔍 Phân tích", "✍ Soạn thảo", "📤 Đã gửi"])
 
-            # ── Phân tích ──────────────────────
             with ai1:
                 a = st.session_state.ei_analysis
                 if a is None:
-                    st.markdown(
-                        "<div style='color:#aaa;font-size:0.83rem;text-align:center;"
-                        "padding:24px 0;'>Nhấn 🔍 Phân tích AI</div>",
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown("<div style='color:#aaa;text-align:center;padding:24px 0;'>"
+                                "Nhấn 🔍 Phân tích AI</div>", unsafe_allow_html=True)
                 elif a == {}:
                     st.error("Phân tích thất bại — kiểm tra API Key")
                 else:
@@ -1375,117 +1357,85 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                         f"<span style='color:#718096;font-size:0.8rem;'>{score}/100</span></div>"
                         f"<div style='background:#e2e8f0;border-radius:4px;height:6px;'>"
                         f"<div style='background:{bar_c};width:{score}%;height:6px;border-radius:4px;'></div></div>",
-                        unsafe_allow_html=True,
-                    )
+                        unsafe_allow_html=True)
                     st.caption(a.get("urgency_reason",""))
                     if a.get("deadline"):
                         st.warning(f"⏱ {a['deadline']}")
-
                     st.markdown(
                         f"<div style='background:{MTL_NAVY}08;border-left:3px solid {MTL_GOLD};"
                         f"border-radius:0 6px 6px 0;padding:10px 12px;margin:10px 0;'>"
                         f"<b style='font-size:0.85rem;color:{MTL_NAVY};'>{a.get('category','')}</b><br>"
                         f"<span style='font-size:0.82rem;color:#4a5568;'>{a.get('summary','')}</span></div>",
-                        unsafe_allow_html=True,
-                    )
+                        unsafe_allow_html=True)
                     if a.get("legal_issues"):
                         with st.expander("⚖ Vấn đề pháp lý", expanded=True):
-                            for iss in a["legal_issues"]:
-                                st.markdown(f"- {iss}")
+                            for iss in a["legal_issues"]: st.markdown(f"- {iss}")
                     if a.get("relevant_laws"):
                         with st.expander("📋 Căn cứ pháp lý"):
-                            for law in a["relevant_laws"]:
-                                st.markdown(f"`{law}`")
+                            for law in a["relevant_laws"]: st.markdown(f"`{law}`")
                     if a.get("action_items"):
                         with st.expander("✅ Hành động", expanded=True):
-                            for i, act in enumerate(a["action_items"], 1):
-                                st.markdown(f"{i}. {act}")
-
+                            for i, act in enumerate(a["action_items"],1): st.markdown(f"{i}. {act}")
                     risk = a.get("risk_level","")
                     risk_ic = {"Cao":"🔴","Trung bình":"🟡","Thấp":"🟢"}.get(risk,"")
                     st.divider()
                     st.caption(f"Rủi ro: {risk_ic} {risk}")
-
-                    # Xuất Word
                     bao_cao = (
                         f"VỤ VIỆC: {em['subject']}\nKHÁCH HÀNG: {em['fromName']}\n\n"
                         f"TÓM TẮT:\n{a.get('summary','')}\n\n"
                         f"VẤN ĐỀ PHÁP LÝ:\n" + "\n".join(f"- {i}" for i in a.get("legal_issues",[])) +
                         f"\n\nCĂN CỨ PHÁP LÝ:\n" + "\n".join(f"- {l}" for l in a.get("relevant_laws",[])) +
-                        f"\n\nHÀNH ĐỘNG CẦN LÀM:\n" + "\n".join(f"{i+1}. {x}" for i,x in enumerate(a.get("action_items",[])))
-                    )
+                        f"\n\nHÀNH ĐỘNG CẦN LÀM:\n" + "\n".join(f"{i+1}. {x}" for i,x in enumerate(a.get("action_items",[]))))
                     wb = tao_file_word("BÁO CÁO PHÂN TÍCH EMAIL", bao_cao, nd["ho_ten"], nd["chuc_vu"])
-                    st.download_button(
-                        "⬇️ Xuất báo cáo Word", data=wb,
+                    st.download_button("⬇️ Xuất báo cáo Word", data=wb,
                         file_name=f"PhanTichEmail_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                    )
+                        use_container_width=True)
 
-            # ── Soạn thảo ──────────────────────
             with ai2:
                 tone_vi = {"formal":"Trang trọng","friendly":"Thân thiện",
                            "firm":"Kiên quyết","urgent":"Khẩn cấp"}
-                tone_sel = st.radio(
-                    "Giọng văn",
-                    options=list(tone_vi.keys()),
-                    format_func=lambda x: tone_vi[x],
-                    horizontal=True, key="ei_tone_r",
-                )
+                tone_sel = st.radio("Giọng văn", options=list(tone_vi.keys()),
+                                    format_func=lambda x: tone_vi[x],
+                                    horizontal=True, key="ei_tone_r")
                 st.session_state.ei_tone = tone_sel
-
                 if st.button("✦ Tạo nháp AI", use_container_width=True, key="ei_gen"):
                     with st.spinner("Claude đang soạn..."):
                         st.session_state.ei_draft = soan_phan_hoi(
-                            em, st.session_state.ei_analysis, tone_sel
-                        )
+                            em, st.session_state.ei_analysis, tone_sel)
                     st.rerun()
-
                 reply_to = st.text_input("Gửi đến", value=em.get("fromEmail",""), key="ei_to")
-                draft = st.text_area(
-                    "Nội dung phản hồi",
-                    value=st.session_state.ei_draft,
-                    height=240, key="ei_ta",
-                    placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn...",
-                )
+                draft = st.text_area("Nội dung phản hồi", value=st.session_state.ei_draft,
+                                     height=240, key="ei_ta",
+                                     placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn...")
                 st.session_state.ei_draft = draft
-
                 sa, sb = st.columns(2)
                 with sa:
                     if draft.strip():
-                        wb2 = tao_file_word(
-                            f"Phản hồi: {em['subject']}", draft, nd["ho_ten"], nd["chuc_vu"]
-                        )
-                        st.download_button(
-                            "⬇️ Tải Word", data=wb2,
+                        wb2 = tao_file_word(f"Phản hồi: {em['subject']}", draft, nd["ho_ten"], nd["chuc_vu"])
+                        st.download_button("⬇️ Tải Word", data=wb2,
                             file_name=f"PhanHoi_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
-                        )
+                            use_container_width=True)
                 with sb:
-                    if st.button(
-                        "📤 Gửi Gmail", type="primary",
-                        use_container_width=True, key="ei_send"
-                    ):
+                    if st.button("📤 Gửi Gmail", type="primary",
+                                 use_container_width=True, key="ei_send"):
                         if not draft.strip():
                             st.warning("Nhập nội dung trước")
-                        elif not _conn:
-                            st.error("Kết nối Gmail ở thanh bên trước")
+                        elif not _connected:
+                            st.error("Đăng nhập Google ở thanh bên trước")
                         else:
                             with st.spinner("Đang gửi..."):
-                                ok = gui_email_smtp(reply_to, em["subject"], draft)
+                                ok = gui_email_gmail_api(reply_to, em["subject"], draft)
                             if ok:
                                 st.session_state.ei_sent.append({
-                                    "to":      reply_to,
-                                    "subject": em["subject"],
-                                    "body":    draft,
-                                    "time":    datetime.now().strftime("%H:%M %d/%m"),
+                                    "to": reply_to, "subject": em["subject"],
+                                    "body": draft, "time": datetime.now().strftime("%H:%M %d/%m"),
                                 })
                                 st.success("✅ Email đã gửi!")
                                 st.session_state.ei_draft = ""
                                 st.rerun()
 
-            # ── Đã gửi ─────────────────────────
             with ai3:
                 sent = st.session_state.ei_sent
                 if not sent:
