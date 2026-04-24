@@ -270,75 +270,118 @@ st.markdown(f"""
 <script>
 (function() {{
 
-  // ── Streamlit render custom HTML bên trong iframe riêng.
-  //    Sidebar thật nằm ở parent document — phải dùng window.parent.document.
-  var _pdoc = (window.parent && window.parent.document) ? window.parent.document : document;
+  // ─────────────────────────────────────────────────────────────
+  //  MTL Sidebar Toggle  — hoạt động bằng cách kích nút gốc của
+  //  Streamlit thay vì tự thao tác DOM (đáng tin cậy hơn nhiều).
+  //
+  //  Streamlit có 2 nút:
+  //    • Đang mở  → data-testid="stSidebarCollapseButton" button  (thu)
+  //    • Đang thu → data-testid="collapsedControl"                (mở)
+  // ─────────────────────────────────────────────────────────────
 
-  function getSidebar()  {{ return _pdoc.querySelector('section[data-testid="stSidebar"]'); }}
-  function getBtn()      {{ return document.getElementById('mtl-sidebar-toggle'); }}
-  function getIcon()     {{ return document.getElementById('mtl-arrow-icon'); }}
-  function isCollapsed() {{ return localStorage.getItem('mtl_sidebar_collapsed') === '1'; }}
+  // Tìm nút thu sidebar (hiện khi sidebar đang mở)
+  function findCloseBtn() {{
+    return (
+      document.querySelector('[data-testid="stSidebarCollapseButton"] button') ||
+      document.querySelector('[data-testid="stSidebarNavCollapseButton"]')     ||
+      document.querySelector('button[aria-label="Close sidebar"]')              ||
+      document.querySelector('button[title="Close sidebar"]')
+    );
+  }}
 
-  // Áp dụng trạng thái thu/mở lên sidebar thực tế
-  function applyState(collapsed) {{
-    var sidebar = getSidebar();
-    var btn     = getBtn();
-    var icon    = getIcon();
-    if (!sidebar || !btn || !icon) return;
+  // Tìm nút mở sidebar (hiện khi sidebar đang thu)
+  function findOpenBtn() {{
+    return (
+      document.querySelector('[data-testid="collapsedControl"]')    ||
+      document.querySelector('button[aria-label="Open sidebar"]')   ||
+      document.querySelector('button[title="Open sidebar"]')
+    );
+  }}
+
+  // Đọc trạng thái thực tế từ DOM (không dùng localStorage để tránh sai)
+  function isSidebarCollapsed() {{
+    var sb = document.querySelector('section[data-testid="stSidebar"]');
+    if (!sb) return true;
+    // Sidebar thu: Streamlit giảm width xuống gần 0 hoặc transform ra ngoài màn hình
+    var rect = sb.getBoundingClientRect();
+    return rect.width < 20;
+  }}
+
+  // Cập nhật icon và vị trí của nút toggle MTL
+  function syncBtn() {{
+    var btn  = document.getElementById('mtl-sidebar-toggle');
+    var icon = document.getElementById('mtl-arrow-icon');
+    var sb   = document.querySelector('section[data-testid="stSidebar"]');
+    if (!btn || !icon) return;
+
+    var collapsed = isSidebarCollapsed();
+    icon.innerHTML = collapsed ? '&#8250;' : '&#8249;';  // › hoặc ‹
 
     if (collapsed) {{
-      // Thu sidebar
-      sidebar.style.transition  = 'width 0.28s ease, opacity 0.28s ease';
-      sidebar.style.width       = '0px';
-      sidebar.style.minWidth    = '0px';
-      sidebar.style.overflow    = 'hidden';
-      sidebar.style.opacity     = '0';
-      sidebar.style.visibility  = 'hidden';
-      icon.innerHTML = '&#8250;';   // ›
       btn.style.left = '0px';
-    }} else {{
-      // Mở sidebar — xoá inline style để Streamlit tự quản lý kích thước
-      sidebar.style.transition  = 'width 0.28s ease, opacity 0.28s ease';
-      sidebar.style.width       = '';
-      sidebar.style.minWidth    = '';
-      sidebar.style.overflow    = '';
-      sidebar.style.opacity     = '';
-      sidebar.style.visibility  = '';
-      icon.innerHTML = '&#8249;';   // ‹
-      // Đợi CSS transition xong rồi tính lại vị trí nút
-      setTimeout(function() {{
-        var sw = sidebar.getBoundingClientRect().width || sidebar.offsetWidth || 300;
-        btn.style.left = sw + 'px';
-      }}, 320);
+    }} else if (sb) {{
+      var sw = sb.getBoundingClientRect().width || 300;
+      btn.style.left = (sw > 0 ? sw : 300) + 'px';
     }}
   }}
 
-  // Hàm toggle — gọi khi bấm nút
+  // Hàm toggle chính — kích nút gốc của Streamlit
   window.mtlToggleSidebar = function() {{
-    var next = !isCollapsed();
-    localStorage.setItem('mtl_sidebar_collapsed', next ? '1' : '0');
-    applyState(next);
+    var collapsed = isSidebarCollapsed();
+
+    if (collapsed) {{
+      // Sidebar đang thu → tìm nút MỞ
+      var openBtn = findOpenBtn();
+      if (openBtn) {{
+        openBtn.click();
+      }} else {{
+        // Fallback: bỏ inline style để Streamlit tự mở lại
+        var sb = document.querySelector('section[data-testid="stSidebar"]');
+        if (sb) {{
+          sb.style.width = ''; sb.style.minWidth = '';
+          sb.style.overflow = ''; sb.style.visibility = '';
+          sb.style.opacity = ''; sb.style.transform = '';
+          sb.style.position = '';
+        }}
+      }}
+    }} else {{
+      // Sidebar đang mở → tìm nút THU
+      var closeBtn = findCloseBtn();
+      if (closeBtn) {{
+        closeBtn.click();
+      }} else {{
+        // Fallback: ẩn trực tiếp
+        var sb2 = document.querySelector('section[data-testid="stSidebar"]');
+        if (sb2) {{
+          sb2.style.transition = 'all 0.28s ease';
+          sb2.style.width = '0px'; sb2.style.minWidth = '0px';
+          sb2.style.overflow = 'hidden'; sb2.style.visibility = 'hidden';
+          sb2.style.opacity = '0';
+        }}
+      }}
+    }}
+
+    // Cập nhật icon sau khi animation hoàn thành
+    setTimeout(syncBtn, 350);
+    setTimeout(syncBtn, 700);
   }};
 
-  // Khởi tạo: đợi sidebar xuất hiện trong DOM rồi áp trạng thái
-  function init() {{
-    var sidebar = getSidebar();
-    var btn     = getBtn();
-    if (!sidebar || !btn) {{ setTimeout(init, 150); return; }}
-
-    var collapsed = isCollapsed();
-    applyState(collapsed);
-
-    // Đặt vị trí nút khi sidebar đang mở
-    if (!collapsed) {{
-      setTimeout(function() {{
-        var sw = sidebar.getBoundingClientRect().width || sidebar.offsetWidth || 300;
-        btn.style.left = sw + 'px';
-      }}, 200);
-    }}
+  // Polling: đồng bộ vị trí nút mỗi 600ms (theo dõi thay đổi từ Streamlit rerun)
+  function startPolling() {{
+    setInterval(syncBtn, 600);
   }}
 
-  init();
+  // Khởi động
+  function init() {{
+    var btn = document.getElementById('mtl-sidebar-toggle');
+    var sb  = document.querySelector('section[data-testid="stSidebar"]');
+    if (!btn || !sb) {{ setTimeout(init, 200); return; }}
+    syncBtn();
+    startPolling();
+  }}
+
+  // Chạy sau khi DOM sẵn sàng
+  setTimeout(init, 300);
 
 }})();
 </script>
