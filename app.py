@@ -774,7 +774,9 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
 
                 if "error" in _tok:
                     st.session_state.pop(_done_key, None)
-                    st.error(f"Google từ chối: {_tok.get('error_description', _tok['error'])}")
+                    _err_msg = _tok.get("error_description", _tok.get("error","?"))
+                    st.error(f"Lỗi OAuth: {_err_msg}")
+                    st.code(f"redirect_uri đang dùng:\n{_clean_url}", language="text")
                 else:
                     # Tạo Credentials thủ công từ token nhận được
                     _creds = Credentials(
@@ -799,19 +801,18 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                     st.query_params.clear()
                     st.rerun()
         else:
-            # Tạo URL đăng nhập Google thủ công — không qua Flow
-            _scope_str = urllib.parse.quote(" ".join(_SCOPES))
-            _state_str = urllib.parse.quote(nd["ten_tk"])
-            _redir_str = urllib.parse.quote(_clean_url)
-            _auth_url  = (
-                "https://accounts.google.com/o/oauth2/v2/auth"
-                f"?client_id={_CLIENT_ID}"
-                f"&redirect_uri={_redir_str}"
-                f"&response_type=code"
-                f"&scope={_scope_str}"
-                f"&access_type=offline"
-                f"&prompt=consent"
-                f"&state={_state_str}"
+            # Tạo URL đăng nhập Google — dùng urlencode chuẩn
+            _auth_url = (
+                "https://accounts.google.com/o/oauth2/v2/auth?"
+                + urllib.parse.urlencode({
+                    "client_id":     _CLIENT_ID,
+                    "redirect_uri":  _clean_url,
+                    "response_type": "code",
+                    "scope":         " ".join(_SCOPES),
+                    "access_type":   "offline",
+                    "prompt":        "consent",
+                    "state":         nd["ten_tk"],
+                })
             )
             st.markdown(
                 f'<a href="{_auth_url}" target="_self">'
