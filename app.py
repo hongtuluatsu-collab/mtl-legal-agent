@@ -746,7 +746,7 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
         _qp    = st.query_params
         _code  = _qp.get("code", "")
         _state = _qp.get("state", "")
-        _clean_url = _APP_URL.rstrip("/")
+        _clean_url = _APP_URL.strip().rstrip("/")
 
         if _code and _state == nd["ten_tk"]:
             # Dùng requests gọi thẳng Google Token API — không qua Flow
@@ -773,10 +773,17 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                     ).json()
 
                 if "error" in _tok:
-                    st.session_state.pop(_done_key, None)
-                    _err_msg = _tok.get("error_description", _tok.get("error","?"))
-                    st.error(f"Lỗi OAuth: {_err_msg}")
-                    st.code(f"redirect_uri đang dùng:\n{_clean_url}", language="text")
+                    # KHÔNG reset _done_key — tránh dùng lại code đã hết hạn
+                    _err = _tok.get("error","")
+                    _desc = _tok.get("error_description","")
+                    st.error("🔴 Xác thực Google thất bại — vui lòng thử lại từ đầu")
+                    st.code(
+                        f"redirect_uri : {_clean_url}\n"
+                        f"error        : {_err}\n"
+                        f"description  : {_desc}",
+                        language="text"
+                    )
+                    st.info("👉 Nhấn 'Đăng nhập với Google' lần nữa để lấy mã mới")
                 else:
                     # Tạo Credentials thủ công từ token nhận được
                     _creds = Credentials(
