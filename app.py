@@ -12,7 +12,6 @@ Chạy app:
 """
 
 import streamlit as st
-import streamlit.components.v1 as stc
 import anthropic
 import base64
 import io
@@ -217,11 +216,6 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     color: white !important; border: none !important;
     border-radius: 8px !important; font-weight: 600 !important;
 }}
-
-/* Trạng thái sidebar — được điều khiển bằng dynamic <style> qua JS */
-section[data-testid="stSidebar"] {{
-    transition: width .28s ease, opacity .28s ease, visibility .28s ease;
-}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -251,9 +245,6 @@ def dang_nhap(ten_tk, mat_khau):
     if ten_tk in TAI_KHOAN and TAI_KHOAN[ten_tk]["mat_khau"] == mat_khau:
         st.session_state.dang_nhap = True
         st.session_state.nguoi_dung = {**TAI_KHOAN[ten_tk], "ten_tk": ten_tk}
-        # Xoá trạng thái toggle cũ để sidebar luôn mở khi đăng nhập lần đầu
-        st.markdown("<script>localStorage.removeItem('mtl_sb3');</script>",
-                    unsafe_allow_html=True)
         return True
     return False
 
@@ -328,46 +319,6 @@ if not st.session_state.dang_nhap:
 </div>
 """, unsafe_allow_html=True)
     st.stop()
-
-# ── Khởi tạo trạng thái sidebar ──
-if "sb_open" not in st.session_state:
-    st.session_state.sb_open = True
-
-# ── CSS ẩn sidebar khi đóng ──
-if not st.session_state.sb_open:
-    st.markdown(
-        "<style>section[data-testid='stSidebar']{display:none!important;}</style>",
-        unsafe_allow_html=True,
-    )
-    # Nút mở sidebar — hiện ở cạnh trái màn hình
-    st.markdown(f"""
-<style>
-div[data-testid="stVerticalBlock"] div.mtl-open-wrap button {{
-    position: fixed !important;
-    top: 50% !important;
-    left: 0 !important;
-    transform: translateY(-50%) !important;
-    z-index: 999999 !important;
-    width: 26px !important;
-    min-height: 64px !important;
-    padding: 0 !important;
-    background: {MTL_NAVY} !important;
-    color: {MTL_GOLD} !important;
-    border: 2px solid {MTL_GOLD} !important;
-    border-left: none !important;
-    border-radius: 0 10px 10px 0 !important;
-    font-size: 20px !important;
-    font-weight: 900 !important;
-    box-shadow: 3px 0 10px rgba(0,0,0,0.3) !important;
-    line-height: 1 !important;
-}}
-</style>
-<div class="mtl-open-wrap">
-""", unsafe_allow_html=True)
-    if st.button("›", key="btn_open_sb", help="Mở thanh bên"):
-        st.session_state.sb_open = True
-        st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  HÀM ĐỌC FILE
@@ -692,27 +643,6 @@ nd = st.session_state.nguoi_dung
 
 # ── SIDEBAR ──
 with st.sidebar:
-    # ── Nút thu gọn sidebar ──
-    st.markdown(f"""
-<style>
-section[data-testid="stSidebar"] div.mtl-close-wrap button {{
-    background: rgba(168,135,74,0.15) !important;
-    border: 1px solid {MTL_GOLD}55 !important;
-    color: {MTL_GOLD2} !important;
-    border-radius: 6px !important;
-    font-size: 0.8rem !important;
-    font-weight: 600 !important;
-    width: 100% !important;
-    margin-bottom: 8px !important;
-}}
-</style>
-<div class="mtl-close-wrap">
-""", unsafe_allow_html=True)
-    if st.button("◄ Thu gọn thanh bên", key="btn_close_sb"):
-        st.session_state.sb_open = False
-        st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
-
     st.markdown(f"""
 <div style="text-align:center;padding:16px 0 8px;">
   <div style="display:flex;align-items:center;justify-content:center;gap:3px;margin-bottom:8px;">
