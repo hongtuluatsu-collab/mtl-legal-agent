@@ -115,33 +115,12 @@ st.set_page_config(
 
 st.markdown(f"""
 <style>
-#MainMenu, footer, header {{ visibility: hidden; }}
+#MainMenu, footer {{ visibility: hidden; }}
 
-/* ── Xoá khoảng trắng trên cùng — header sát mép màn hình ── */
-.stApp > header {{ display: none !important; }}
-[data-testid="stAppViewContainer"] {{
-    padding-top: 0 !important;
-}}
-[data-testid="stMainBlockContainer"] {{
-    padding-top: 0.5rem !important;
-    max-width: 100% !important;
-}}
-.block-container {{
-    padding-top: 0.5rem !important;
-}}
-
-/* ── Sidebar luôn hiện, không bị ẩn bởi Streamlit state ── */
-[data-testid="stSidebarCollapseButton"],
-[data-testid="collapsedControl"] {{
-    display: none !important;
-}}
+/* Sidebar — chỉ màu sắc, không đụng layout */
 section[data-testid="stSidebar"] {{
-    display: flex !important;
-    transform: translateX(0) !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-    background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%) !important;
-    border-right: 2px solid {MTL_GOLD} !important;
+    background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%);
+    border-right: 2px solid {MTL_GOLD};
 }}
 section[data-testid="stSidebar"] * {{ color: #e8eef5 !important; }}
 section[data-testid="stSidebar"] input {{
