@@ -12,6 +12,7 @@ Chạy app:
 """
 
 import streamlit as st
+import streamlit.components.v1 as stc
 import anthropic
 import base64
 import io
@@ -362,92 +363,90 @@ if not st.session_state.dang_nhap:
 """, unsafe_allow_html=True)
     st.stop()
 
-# ── Toggle button — inject SAU đăng nhập, dùng dynamic <style> + MutationObserver ──
+# ── Nút toggle: HTML qua st.markdown (main doc) + JS qua stc.html (iframe, dùng window.parent) ──
+# stc.html() LUÔN execute JS đúng, còn st.markdown có thể render script thành text.
+
 st.markdown(f"""
-<div id="mtl-sb-btn" onclick="mtlToggle()" title="Bấm để thu/mở thanh bên">
-  <span id="mtl-sb-ic">&#8249;</span>
+<div id="mtl-sb-btn"
+     onclick="window.mtlToggle && window.mtlToggle()"
+     title="Bấm để thu/mở thanh bên"
+     style="position:fixed;top:50%;left:0;transform:translateY(-50%);
+            z-index:999999;width:22px;height:64px;
+            background:{MTL_NAVY};border:2px solid {MTL_GOLD};
+            border-left:none;border-radius:0 10px 10px 0;
+            cursor:pointer;display:flex;align-items:center;
+            justify-content:center;box-shadow:3px 0 12px rgba(30,77,130,.35);
+            transition:width .15s,background .15s;">
+  <span id="mtl-sb-ic"
+        style="color:{MTL_GOLD};font-size:16px;font-weight:900;
+               pointer-events:none;user-select:none;line-height:1;">&#8249;</span>
 </div>
-<script>
-(function() {{
-  var LS  = 'mtl_sb5';
-  var SID = 'mtl-hide-style';
-  var _obs = null;
-
-  function getSb()  {{ return document.querySelector('section[data-testid="stSidebar"]'); }}
-  function getBtn() {{ return document.getElementById('mtl-sb-btn'); }}
-  function getIc()  {{ return document.getElementById('mtl-sb-ic'); }}
-  function isHidden() {{ return localStorage.getItem(LS) === '1'; }}
-
-  /* Tạo hoặc lấy lại thẻ <style> riêng của MTL trong <head> */
-  function getStyle() {{
-    var s = document.getElementById(SID);
-    if (!s) {{
-      s = document.createElement('style');
-      s.id  = SID;
-      s.textContent =
-        'section[data-testid="stSidebar"]{{' +
-        'width:0!important;min-width:0!important;' +
-        'overflow:hidden!important;visibility:hidden!important;' +
-        'opacity:0!important;transition:all .28s ease!important}}';
-      document.head.appendChild(s);
-    }}
-    return s;
-  }}
-
-  /* Áp trạng thái ẩn/hiện vào <style> */
-  function applyState() {{
-    var s = getStyle();
-    s.disabled = !isHidden();
-  }}
-
-  /* Cập nhật icon và vị trí nút */
-  function syncBtn() {{
-    var b = getBtn(), ic = getIc(), sb = getSb();
-    if (!b || !ic) return;
-    if (isHidden()) {{
-      ic.innerHTML = '&#8250;';
-      b.style.left = '0px';
-      b.title = 'Bấm để MỞ thanh bên';
-    }} else {{
-      ic.innerHTML = '&#8249;';
-      var sw = sb ? sb.getBoundingClientRect().width : 0;
-      b.style.left = (sw > 30 ? sw : 300) + 'px';
-      b.title = 'Bấm để THU thanh bên';
-    }}
-  }}
-
-  /* Hàm toggle — gọi khi bấm nút */
-  window.mtlToggle = function() {{
-    localStorage.setItem(LS, isHidden() ? '0' : '1');
-    applyState();
-    setTimeout(syncBtn, 300);
-    setTimeout(syncBtn, 750);
-  }};
-
-  /* MutationObserver: reapply khi Streamlit rerun thay đổi DOM sidebar */
-  function watchSidebar() {{
-    if (_obs) return;
-    var root = document.querySelector('[data-testid="stAppViewContainer"]') || document.body;
-    _obs = new MutationObserver(function() {{
-      if (isHidden()) applyState();
-    }});
-    _obs.observe(root, {{ childList:true, subtree:true, attributes:true,
-                          attributeFilter:['style','class'] }});
-  }}
-
-  function init() {{
-    var sb = getSb(), b = getBtn();
-    if (!sb || !b) {{ setTimeout(init, 250); return; }}
-    applyState();
-    syncBtn();
-    watchSidebar();
-    setInterval(syncBtn, 1000);
-  }}
-
-  setTimeout(init, 600);
-}})();
-</script>
 """, unsafe_allow_html=True)
+
+stc.html("""
+<script>
+(function(){
+  var LS='mtl_sb6', SID='mtl-sb-hide-css', obs=null;
+  var P=window.parent, PD=P.document;
+
+  function getSb(){ return PD.querySelector('section[data-testid="stSidebar"]'); }
+  function getBtn(){ return PD.getElementById('mtl-sb-btn'); }
+  function getIc(){ return PD.getElementById('mtl-sb-ic'); }
+  function hidden(){ return localStorage.getItem(LS)==='1'; }
+
+  function style(){
+    var s=PD.getElementById(SID);
+    if(!s){
+      s=PD.createElement('style');
+      s.id=SID;
+      s.textContent='section[data-testid="stSidebar"]{width:0!important;min-width:0!important;overflow:hidden!important;visibility:hidden!important;opacity:0!important;transition:all .28s ease!important}';
+      PD.head.appendChild(s);
+    }
+    return s;
+  }
+
+  function apply(){ style().disabled=!hidden(); }
+
+  function sync(){
+    var b=getBtn(),ic=getIc(),sb=getSb();
+    if(!b||!ic)return;
+    if(hidden()){
+      ic.innerHTML='&#8250;';
+      b.style.left='0px';
+      b.title='Bấm de MO thanh ben';
+    }else{
+      ic.innerHTML='&#8249;';
+      var w=sb?sb.getBoundingClientRect().width:0;
+      b.style.left=(w>30?w:300)+'px';
+      b.title='Bấm de THU thanh ben';
+    }
+  }
+
+  P.mtlToggle=function(){
+    localStorage.setItem(LS,hidden()?'0':'1');
+    apply();
+    setTimeout(sync,300);
+    setTimeout(sync,750);
+  };
+
+  function watch(){
+    if(obs)return;
+    var root=PD.querySelector('[data-testid="stAppViewContainer"]')||PD.body;
+    obs=new P.MutationObserver(function(){if(hidden())apply();});
+    obs.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class']});
+  }
+
+  function init(){
+    var sb=getSb(),b=getBtn();
+    if(!sb||!b){setTimeout(init,250);return;}
+    apply();sync();watch();
+    setInterval(sync,1000);
+  }
+
+  setTimeout(init,700);
+})();
+</script>
+""", height=0)
 
 # ─────────────────────────────────────────────
 #  HÀM ĐỌC FILE
