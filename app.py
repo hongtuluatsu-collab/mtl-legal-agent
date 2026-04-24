@@ -266,66 +266,6 @@ section[data-testid="stSidebar"] {{
 </style>
 """, unsafe_allow_html=True)
 
-# ── Toggle button — dùng html.classList (React không đụng vào <html>) ──
-st.markdown(f"""
-<div id="mtl-sb-btn" onclick="mtlToggle()" title="Thu/mở thanh bên (Click)">
-  <span id="mtl-sb-ic">&#8249;</span>
-</div>
-
-<script>
-(function() {{
-  var LS = 'mtl_sb3';
-
-  function isOff()    {{ return document.documentElement.classList.contains('mtl-sb-off'); }}
-  function sidebar()  {{ return document.querySelector('section[data-testid="stSidebar"]'); }}
-  function btn()      {{ return document.getElementById('mtl-sb-btn'); }}
-  function icon()     {{ return document.getElementById('mtl-sb-ic'); }}
-
-  function updateBtn() {{
-    var b = btn(), ic = icon(), sb = sidebar();
-    if (!b || !ic) return;
-    if (isOff()) {{
-      ic.innerHTML = '&#8250;';
-      b.style.left = '0px';
-      b.title = 'Bấm để MỞ thanh bên';
-    }} else {{
-      ic.innerHTML = '&#8249;';
-      var sw = sb ? sb.getBoundingClientRect().width : 0;
-      b.style.left = (sw > 20 ? sw : 300) + 'px';
-      b.title = 'Bấm để THU thanh bên';
-    }}
-  }}
-
-  window.mtlToggle = function() {{
-    var html = document.documentElement;
-    if (isOff()) {{
-      html.classList.remove('mtl-sb-off');
-      localStorage.setItem(LS, '0');
-    }} else {{
-      html.classList.add('mtl-sb-off');
-      localStorage.setItem(LS, '1');
-    }}
-    setTimeout(updateBtn, 320);
-    setTimeout(updateBtn, 700);
-  }};
-
-  function init() {{
-    var sb = sidebar(), b = btn();
-    if (!sb || !b) {{ setTimeout(init, 200); return; }}
-
-    if (localStorage.getItem(LS) === '1') {{
-      document.documentElement.classList.add('mtl-sb-off');
-    }}
-
-    updateBtn();
-    setInterval(updateBtn, 800);
-  }}
-
-  setTimeout(init, 400);
-}})();
-</script>
-""", unsafe_allow_html=True)
-
 # ─────────────────────────────────────────────
 #  XÁC ĐỊNH API KEY
 # ─────────────────────────────────────────────
@@ -352,6 +292,9 @@ def dang_nhap(ten_tk, mat_khau):
     if ten_tk in TAI_KHOAN and TAI_KHOAN[ten_tk]["mat_khau"] == mat_khau:
         st.session_state.dang_nhap = True
         st.session_state.nguoi_dung = {**TAI_KHOAN[ten_tk], "ten_tk": ten_tk}
+        # Xoá trạng thái toggle cũ để sidebar luôn mở khi đăng nhập lần đầu
+        st.markdown("<script>localStorage.removeItem('mtl_sb3');</script>",
+                    unsafe_allow_html=True)
         return True
     return False
 
@@ -426,6 +369,63 @@ if not st.session_state.dang_nhap:
 </div>
 """, unsafe_allow_html=True)
     st.stop()
+
+# ── Toggle button — chỉ inject SAU khi đăng nhập thành công ──
+# (nằm sau st.stop() nên không xuất hiện trên trang đăng nhập)
+st.markdown(f"""
+<div id="mtl-sb-btn" onclick="mtlToggle()" title="Bấm để thu/mở thanh bên">
+  <span id="mtl-sb-ic">&#8249;</span>
+</div>
+<script>
+(function() {{
+  var LS = 'mtl_sb3';
+
+  function isOff()   {{ return document.documentElement.classList.contains('mtl-sb-off'); }}
+  function getSb()   {{ return document.querySelector('section[data-testid="stSidebar"]'); }}
+  function getBtn()  {{ return document.getElementById('mtl-sb-btn'); }}
+  function getIc()   {{ return document.getElementById('mtl-sb-ic'); }}
+
+  function sync() {{
+    var b = getBtn(), ic = getIc(), sb = getSb();
+    if (!b || !ic) return;
+    if (isOff()) {{
+      ic.innerHTML = '&#8250;';
+      b.style.left = '0px';
+      b.setAttribute('title','Bấm để MỞ thanh bên');
+    }} else {{
+      ic.innerHTML = '&#8249;';
+      var sw = sb ? sb.getBoundingClientRect().width : 0;
+      b.style.left = (sw > 30 ? sw : 300) + 'px';
+      b.setAttribute('title','Bấm để THU thanh bên');
+    }}
+  }}
+
+  window.mtlToggle = function() {{
+    var h = document.documentElement;
+    if (isOff()) {{
+      h.classList.remove('mtl-sb-off');
+      localStorage.setItem(LS,'0');
+    }} else {{
+      h.classList.add('mtl-sb-off');
+      localStorage.setItem(LS,'1');
+    }}
+    setTimeout(sync,300); setTimeout(sync,700);
+  }};
+
+  function init() {{
+    var sb = getSb(), b = getBtn();
+    if (!sb || !b) {{ setTimeout(init,200); return; }}
+    if (localStorage.getItem(LS)==='1') {{
+      document.documentElement.classList.add('mtl-sb-off');
+    }}
+    sync();
+    setInterval(sync,900);
+  }}
+
+  setTimeout(init,500);
+}})();
+</script>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 #  HÀM ĐỌC FILE
