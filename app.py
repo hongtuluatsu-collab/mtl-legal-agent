@@ -117,6 +117,22 @@ st.markdown(f"""
 <style>
 #MainMenu, footer, header {{ visibility: hidden; }}
 
+/* Nút THU sidebar (« bên trong sidebar) — giữ hiển thị, style MTL */
+[data-testid="stSidebarCollapseButton"] button {{
+    color: {MTL_GOLD} !important;
+    background: transparent !important;
+    border: none !important;
+}}
+
+/* Nút MỞ sidebar (» hiện ra khi sidebar đã thu) — style nổi bật */
+[data-testid="collapsedControl"] {{
+    background: {MTL_NAVY} !important;
+    border: 2px solid {MTL_GOLD} !important;
+    border-left: none !important;
+    border-radius: 0 8px 8px 0 !important;
+    color: {MTL_GOLD} !important;
+}}
+
 section[data-testid="stSidebar"] {{
     background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%) !important;
     border-right: 2px solid {MTL_GOLD} !important;
