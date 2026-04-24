@@ -115,7 +115,31 @@ st.set_page_config(
 
 st.markdown(f"""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap');
+
 #MainMenu, footer {{ visibility: hidden; }}
+
+/* ── Font thương hiệu ── */
+html, body, [class*="css"], .stApp, .stMarkdown, p, div, span, label,
+input, textarea, select, button {{
+    font-family: 'Be Vietnam Pro', sans-serif !important;
+}}
+h1, h2, h3, h4, h5,
+.mtl-header h1,
+.mtl-title-block h1 {{
+    font-family: 'Playfair Display', serif !important;
+}}
+
+/* ── Xoá khoảng trắng — nội dung sát viền ── */
+.stApp > header {{ display: none !important; }}
+[data-testid="stAppViewContainer"] > .main {{
+    padding: 0 !important;
+}}
+[data-testid="stMainBlockContainer"],
+.block-container {{
+    padding: 0 1rem 1rem 1rem !important;
+    max-width: 100% !important;
+}}
 
 /* Sidebar — chỉ màu sắc, không đụng layout */
 section[data-testid="stSidebar"] {{
@@ -191,12 +215,13 @@ section[data-testid="stSidebar"] .stFileUploader button {{
 .mtl-user-badge .role {{ color: {MTL_GOLD2}; font-size: 0.78rem; }}
 .mtl-user-badge .date {{ color: rgba(255,255,255,0.5); font-size: 0.72rem; margin-top: 2px; }}
 .login-card {{
-    background: white; border-radius: 16px; padding: 40px 36px;
+    background: white; border-radius: 16px; padding: 32px 36px 28px;
     box-shadow: 0 8px 40px rgba(30,77,130,0.15);
     border-top: 4px solid {MTL_GOLD}; max-width: 420px; margin: 0 auto;
 }}
-.login-title {{ text-align: center; color: {MTL_NAVY}; font-size: 1.3rem; font-weight: 700; margin: 8px 0 4px; }}
-.login-sub {{ text-align: center; color: {MTL_GOLD}; font-size: 0.82rem; letter-spacing: 1px; margin: 0 0 24px; text-transform: uppercase; font-weight: 600; }}
+.login-title {{ text-align: center; color: {MTL_NAVY}; font-size: 1.4rem; font-weight: 700; margin: 8px 0 4px;
+    font-family: 'Playfair Display', serif !important; }}
+.login-sub {{ text-align: center; color: {MTL_GOLD}; font-size: 0.82rem; letter-spacing: 1px; margin: 0 0 20px; text-transform: uppercase; font-weight: 600; }}
 .result-box {{
     background: linear-gradient(135deg, #f0f5ff 0%, #fafbff 100%);
     border-left: 4px solid {MTL_NAVY};
