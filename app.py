@@ -749,66 +749,43 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
         _state = _qp.get("state", "")
 
         if _code and _state == nd["ten_tk"]:
-            _processed_key = f"gcode_{_code[:20]}"
-            if st.session_state.get(_processed_key):
+            # Guard: tránh xử lý code 2 lần khi Streamlit rerun
+            _done_key = f"oauth_done_{_code[:24]}"
+            if st.session_state.get(_done_key):
+                # Code đã xử lý rồi → chỉ xoá params
                 st.query_params.clear()
-                st.rerun()
-            st.session_state[_processed_key] = True
-            try:
-                _flow = Flow.from_client_config(
-                    {"web": {
-                        "client_id": _CLIENT_ID,
-                        "client_secret": _CLIENT_SECRET,
-                        "redirect_uris": [_APP_URL.rstrip("/")],
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                    }},
-                    scopes=_SCOPES,
-                    redirect_uri=_APP_URL.rstrip("/"),
-                )
-                _flow.fetch_token(code=_code)
-                _creds = _flow.credentials
-                st.session_state[_cred_key] = _creds
+            else:
+                st.session_state[_done_key] = True
+                _clean_url = _APP_URL.rstrip("/")
                 try:
-                    _svc = build("oauth2", "v2", credentials=_creds)
-                    _info = _svc.userinfo().get().execute()
-                    st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
-                except Exception:
-                    pass
-                st.query_params.clear()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Lỗi xác thực: {e}")
-            # Nhận được code → đổi lấy token
-            try:
-                _flow = Flow.from_client_config(
-                    {"web": {
-                        "client_id": _CLIENT_ID,
-                        "client_secret": _CLIENT_SECRET,
-                        "redirect_uris": [_APP_URL],
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                    }},
-                    scopes=_SCOPES,
-                    redirect_uri=_APP_URL,
-                )
-                _flow.fetch_token(code=_code)
-                _creds = _flow.credentials
-                st.session_state[_cred_key] = _creds
+                    _flow = Flow.from_client_config(
+                        {"web": {
+                            "client_id": _CLIENT_ID,
+                            "client_secret": _CLIENT_SECRET,
+                            "redirect_uris": [_clean_url],
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }},
+                        scopes=_SCOPES,
+                        redirect_uri=_clean_url,
+                    )
+                    _flow.fetch_token(code=_code)
+                    _creds = _flow.credentials
+                    st.session_state[_cred_key] = _creds
 
-                # Lấy email để hiển thị
-                try:
-                    _svc = build("oauth2", "v2", credentials=_creds)
-                    _info = _svc.userinfo().get().execute()
-                    st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
-                except Exception:
-                    pass
+                    # Lấy email để hiển thị
+                    try:
+                        _svc = build("oauth2", "v2", credentials=_creds)
+                        _info = _svc.userinfo().get().execute()
+                        st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
+                    except Exception:
+                        pass
 
-                # Xoá query params
-                st.query_params.clear()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Lỗi xác thực: {e}")
+                    st.query_params.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.session_state.pop(_done_key, None)
+                    st.error(f"Lỗi xác thực: {e}")
         else:
             # Tạo URL đăng nhập Google
             _flow = Flow.from_client_config(
