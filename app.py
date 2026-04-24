@@ -743,67 +743,75 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
             st.session_state.pop(_cred_key, None)
             st.rerun()
     else:
-        # Kiểm tra có code OAuth callback không
-        _qp = st.query_params
+        _qp    = st.query_params
         _code  = _qp.get("code", "")
         _state = _qp.get("state", "")
+        _clean_url = _APP_URL.rstrip("/")
 
         if _code and _state == nd["ten_tk"]:
-            # Guard: tránh xử lý code 2 lần khi Streamlit rerun
-            _done_key = f"oauth_done_{_code[:24]}"
-            if st.session_state.get(_done_key):
-                # Code đã xử lý rồi → chỉ xoá params
-                st.query_params.clear()
-            else:
-                st.session_state[_done_key] = True
-                _clean_url = _APP_URL.rstrip("/")
-                try:
-                    _flow = Flow.from_client_config(
-                        {"web": {
-                            "client_id": _CLIENT_ID,
-                            "client_secret": _CLIENT_SECRET,
-                            "redirect_uris": [_clean_url],
-                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                            "token_uri": "https://oauth2.googleapis.com/token",
-                        }},
-                        scopes=_SCOPES,
-                        redirect_uri=_clean_url,
-                    )
-                    _flow.fetch_token(code=_code)
-                    _creds = _flow.credentials
-                    st.session_state[_cred_key] = _creds
+            # Dùng requests gọi thẳng Google Token API — không qua Flow
+            import requests as _http
+            _done_key = f"oauth_done_{_code[:28]}"
 
-                    # Lấy email để hiển thị
+            if st.session_state.get(_cred_key) and st.session_state[_cred_key].valid:
+                # Đã có credentials hợp lệ → chỉ xoá params
+                st.query_params.clear()
+                st.rerun()
+            elif not st.session_state.get(_done_key):
+                st.session_state[_done_key] = True
+                with st.spinner("Đang xác thực với Google..."):
+                    _tok = _http.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={
+                            "code":          _code,
+                            "client_id":     _CLIENT_ID,
+                            "client_secret": _CLIENT_SECRET,
+                            "redirect_uri":  _clean_url,
+                            "grant_type":    "authorization_code",
+                        },
+                        timeout=15,
+                    ).json()
+
+                if "error" in _tok:
+                    st.session_state.pop(_done_key, None)
+                    st.error(f"Google từ chối: {_tok.get('error_description', _tok['error'])}")
+                else:
+                    # Tạo Credentials thủ công từ token nhận được
+                    _creds = Credentials(
+                        token=_tok["access_token"],
+                        refresh_token=_tok.get("refresh_token"),
+                        token_uri="https://oauth2.googleapis.com/token",
+                        client_id=_CLIENT_ID,
+                        client_secret=_CLIENT_SECRET,
+                        scopes=_SCOPES,
+                    )
+                    st.session_state[_cred_key] = _creds
+                    # Lấy địa chỉ email
                     try:
-                        _svc = build("oauth2", "v2", credentials=_creds)
-                        _info = _svc.userinfo().get().execute()
+                        _info = _http.get(
+                            "https://www.googleapis.com/oauth2/v2/userinfo",
+                            headers={"Authorization": f"Bearer {_tok['access_token']}"},
+                            timeout=10,
+                        ).json()
                         st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
                     except Exception:
                         pass
-
                     st.query_params.clear()
                     st.rerun()
-                except Exception as e:
-                    st.session_state.pop(_done_key, None)
-                    st.error(f"Lỗi xác thực: {e}")
         else:
-            # Tạo URL đăng nhập Google
-            _flow = Flow.from_client_config(
-                {"web": {
-                    "client_id": _CLIENT_ID,
-                    "client_secret": _CLIENT_SECRET,
-                    "redirect_uris": [_APP_URL],
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                }},
-                scopes=_SCOPES,
-                redirect_uri=_APP_URL,
-            )
-            _auth_url, _ = _flow.authorization_url(
-                access_type="offline",
-                include_granted_scopes="true",
-                prompt="consent",
-                state=nd["ten_tk"],   # dùng tên tài khoản để phân biệt luật sư
+            # Tạo URL đăng nhập Google thủ công — không qua Flow
+            _scope_str = urllib.parse.quote(" ".join(_SCOPES))
+            _state_str = urllib.parse.quote(nd["ten_tk"])
+            _redir_str = urllib.parse.quote(_clean_url)
+            _auth_url  = (
+                "https://accounts.google.com/o/oauth2/v2/auth"
+                f"?client_id={_CLIENT_ID}"
+                f"&redirect_uri={_redir_str}"
+                f"&response_type=code"
+                f"&scope={_scope_str}"
+                f"&access_type=offline"
+                f"&prompt=consent"
+                f"&state={_state_str}"
             )
             st.markdown(
                 f'<a href="{_auth_url}" target="_self">'
