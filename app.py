@@ -690,18 +690,17 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
     )
 
     import requests as _rq
-    from datetime import timezone as _tz
 
     _CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
     _CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
-    _APP_URL_RAW   = os.environ.get("APP_URL", "").strip().rstrip("/")
-    # Hardcode URI để chắc chắn không bị env var sai
     _REDIRECT_URI  = "https://web-production-57eec.up.railway.app"
-    _SCOPES = [
+    _SCOPES        = [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
     ]
-    _cred_key = f"gcred_{nd['ten_tk']}"
+    _cred_key    = f"gcred_{nd['ten_tk']}"
+    _pending_key = f"pending_code_{nd['ten_tk']}"
+    _done_key    = f"done_code_{nd['ten_tk']}"
 
     def _is_connected():
         c = st.session_state.get(_cred_key)
@@ -715,8 +714,24 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                 return False
         return c.valid
 
+    def _exchange_token(code):
+        """Đổi code lấy token — chỉ gọi 1 lần duy nhất."""
+        resp = _rq.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code":          code,
+                "client_id":     _CLIENT_ID,
+                "client_secret": _CLIENT_SECRET,
+                "redirect_uri":  _REDIRECT_URI,
+                "grant_type":    "authorization_code",
+            },
+            timeout=15,
+        )
+        return resp.json()
+
     if not _CLIENT_ID or not _CLIENT_SECRET:
-        st.error("Thiếu GOOGLE_CLIENT_ID hoặc CLIENT_SECRET")
+        st.error("Thiếu GOOGLE_CLIENT_ID hoặc CLIENT_SECRET trong Railway")
+
     elif _is_connected():
         _email_disp = st.session_state.get(f"gemail_{nd['ten_tk']}", "Gmail")
         st.markdown(
@@ -727,72 +742,66 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
         )
         if st.button("↩ Ngắt kết nối", use_container_width=True,
                      key=f"gdisconn_{nd['ten_tk']}"):
-            for _k in [_cred_key, f"gemail_{nd['ten_tk']}", f"oauth_code_{nd['ten_tk']}"]:
+            for _k in [_cred_key, f"gemail_{nd['ten_tk']}", _pending_key, _done_key]:
                 st.session_state.pop(_k, None)
             st.rerun()
+
     else:
+        # ══ PHASE 1: Phát hiện code trong URL → lưu vào session, xoá URL ngay ══
         _qp    = st.query_params
         _code  = _qp.get("code", "")
         _state = _qp.get("state", "")
-        _code_sk = f"oauth_code_{nd['ten_tk']}"
 
         if _code and _state == nd["ten_tk"]:
-            # Tránh xử lý code đã dùng
-            if st.session_state.get(_code_sk) == _code:
-                st.query_params.clear()
-            else:
-                st.session_state[_code_sk] = _code
-                _now = datetime.now(_tz.utc).isoformat()
-                _resp = _rq.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "code":          _code,
-                        "client_id":     _CLIENT_ID,
-                        "client_secret": _CLIENT_SECRET,
-                        "redirect_uri":  _REDIRECT_URI,
-                        "grant_type":    "authorization_code",
-                    },
-                    timeout=15,
-                )
-                _tok = _resp.json()
+            _prev = st.session_state.get(_pending_key, "")
+            if _prev != _code:
+                # Lần đầu thấy code này → lưu vào session
+                st.session_state[_pending_key] = _code
+                st.session_state.pop(_done_key, None)
+            # Xoá URL ngay — sau đây chỉ còn 1 lần chạy sạch
+            st.query_params.clear()
+            st.rerun()
 
-                if "access_token" in _tok:
-                    _creds = Credentials(
-                        token=_tok["access_token"],
-                        refresh_token=_tok.get("refresh_token"),
-                        token_uri="https://oauth2.googleapis.com/token",
-                        client_id=_CLIENT_ID,
-                        client_secret=_CLIENT_SECRET,
-                        scopes=_SCOPES,
-                    )
-                    st.session_state[_cred_key] = _creds
-                    try:
-                        _me = _rq.get(
-                            "https://www.googleapis.com/oauth2/v2/userinfo",
-                            headers={"Authorization": f"Bearer {_tok['access_token']}"},
-                            timeout=8,
-                        ).json()
-                        st.session_state[f"gemail_{nd['ten_tk']}"] = _me.get("email","")
-                    except Exception:
-                        pass
-                    st.query_params.clear()
-                    st.rerun()
-                else:
-                    # Thất bại — hiện TOÀN BỘ thông tin để debug
-                    st.session_state.pop(_code_sk, None)
-                    st.error("❌ Xác thực thất bại")
-                    _dbg = "\n".join([
-                        "=== DEBUG INFO ===",
-                        f"Thoi gian server : {_now}",
-                        f"redirect_uri     : {_REDIRECT_URI}",
-                        f"code (10 dau)    : {_code[:10]}...",
-                        f"HTTP status      : {_resp.status_code}",
-                        f"Google response  : {_tok}",
-                        f"APP_URL env var  : {_APP_URL_RAW}",
-                    ])
-                    st.code(_dbg, language="text")
+        # ══ PHASE 2: URL đã sạch → exchange token (chạy đúng 1 lần) ══
+        elif st.session_state.get(_pending_key) and not st.session_state.get(_done_key):
+            _saved_code = st.session_state[_pending_key]
+            # Đánh dấu "đang xử lý" TRƯỚC KHI gọi API
+            st.session_state[_done_key] = True
+
+            with st.spinner("Đang xác thực với Google..."):
+                _tok = _exchange_token(_saved_code)
+
+            if "access_token" in _tok:
+                _creds = Credentials(
+                    token=_tok["access_token"],
+                    refresh_token=_tok.get("refresh_token"),
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=_CLIENT_ID,
+                    client_secret=_CLIENT_SECRET,
+                    scopes=_SCOPES,
+                )
+                st.session_state[_cred_key] = _creds
+                st.session_state.pop(_pending_key, None)
+                # Lấy email
+                try:
+                    _me = _rq.get(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        headers={"Authorization": f"Bearer {_tok['access_token']}"},
+                        timeout=8,
+                    ).json()
+                    st.session_state[f"gemail_{nd['ten_tk']}"] = _me.get("email", "")
+                except Exception:
+                    pass
+                st.rerun()
+            else:
+                # Thất bại → cho thử lại
+                st.session_state.pop(_pending_key, None)
+                st.session_state.pop(_done_key, None)
+                _err = _tok.get("error_description", _tok.get("error", "?"))
+                st.error(f"❌ Lỗi: {_err} — vui lòng nhấn đăng nhập lại")
+
         else:
-            # Nút đăng nhập
+            # ══ Hiện nút đăng nhập ══
             import urllib.parse as _up
             _auth_url = (
                 "https://accounts.google.com/o/oauth2/v2/auth?"
@@ -811,10 +820,10 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                 f'<button style="width:100%;background:#4285F4;color:white;border:none;'
                 f'border-radius:8px;padding:9px;font-size:0.85rem;font-weight:600;'
                 f'cursor:pointer;">'
-                f'🔐 Đăng nhập Gmail</button></a>',
+                f'🔐 Đăng nhập với Google</button></a>',
                 unsafe_allow_html=True,
             )
-            st.caption("redirect_uri: " + _REDIRECT_URI)
+            st.caption("Dùng mật khẩu Gmail thông thường")
 # ── HEADER ──
 st.markdown(f"""
 <div class="mtl-header">
