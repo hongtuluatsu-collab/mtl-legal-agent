@@ -254,27 +254,14 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     color: white;
 }}
 
-/* Trạng thái sidebar thu nhỏ */
-body.sidebar-collapsed section[data-testid="stSidebar"] {{
-    width: 0 !important;
-    min-width: 0 !important;
-    overflow: hidden !important;
-    visibility: hidden;
-    opacity: 0;
-    transition: all 0.3s ease;
-}}
-body.sidebar-collapsed section[data-testid="stSidebar"] + div,
-body.sidebar-collapsed .main {{
-    margin-left: 0 !important;
-    padding-left: 0 !important;
-}}
+/* Trạng thái sidebar — được xử lý hoàn toàn bằng inline style qua JS */
 section[data-testid="stSidebar"] {{
-    transition: all 0.3s ease;
+    transition: width 0.28s ease, opacity 0.28s ease;
 }}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Inject toggle button + JS (chạy 1 lần sau khi CSS load) ──
+# ── Inject toggle button + JS (dùng window.parent.document vì Streamlit render trong iframe) ──
 st.markdown(f"""
 <div id="mtl-sidebar-toggle" onclick="mtlToggleSidebar()" title="Thu/mở thanh bên">
   <span class="mtl-arrow" id="mtl-arrow-icon">&#8249;</span>
@@ -282,76 +269,77 @@ st.markdown(f"""
 
 <script>
 (function() {{
-  // Khôi phục trạng thái từ localStorage
-  var collapsed = localStorage.getItem('mtl_sidebar_collapsed') === '1';
-  if (collapsed) {{
-    document.body.classList.add('sidebar-collapsed');
-    var icon = document.getElementById('mtl-arrow-icon');
-    if (icon) icon.innerHTML = '&#8250;';
-    // Dịch nút sang trái khi sidebar thu
-    var btn = document.getElementById('mtl-sidebar-toggle');
-    if (btn) btn.style.left = '0';
-  }}
-}})();
 
-window.mtlToggleSidebar = function() {{
-  var body     = document.body;
-  var btn      = document.getElementById('mtl-sidebar-toggle');
-  var icon     = document.getElementById('mtl-arrow-icon');
-  var sidebar  = document.querySelector('section[data-testid="stSidebar"]');
-  var collapsed = body.classList.toggle('sidebar-collapsed');
+  // ── Streamlit render custom HTML bên trong iframe riêng.
+  //    Sidebar thật nằm ở parent document — phải dùng window.parent.document.
+  var _pdoc = (window.parent && window.parent.document) ? window.parent.document : document;
 
-  if (collapsed) {{
-    // Thu nhỏ
-    icon.innerHTML = '&#8250;';
-    btn.style.left = '0px';
-    if (sidebar) {{
-      sidebar.style.width = '0';
-      sidebar.style.minWidth = '0';
-      sidebar.style.overflow = 'hidden';
-      sidebar.style.visibility = 'hidden';
-      sidebar.style.opacity = '0';
-    }}
-    localStorage.setItem('mtl_sidebar_collapsed', '1');
-  }} else {{
-    // Mở rộng
-    icon.innerHTML = '&#8249;';
-    if (sidebar) {{
-      sidebar.style.width = '';
-      sidebar.style.minWidth = '';
-      sidebar.style.overflow = '';
-      sidebar.style.visibility = '';
-      sidebar.style.opacity = '';
-      // Lấy lại vị trí nút sau khi sidebar hiện
+  function getSidebar()  {{ return _pdoc.querySelector('section[data-testid="stSidebar"]'); }}
+  function getBtn()      {{ return document.getElementById('mtl-sidebar-toggle'); }}
+  function getIcon()     {{ return document.getElementById('mtl-arrow-icon'); }}
+  function isCollapsed() {{ return localStorage.getItem('mtl_sidebar_collapsed') === '1'; }}
+
+  // Áp dụng trạng thái thu/mở lên sidebar thực tế
+  function applyState(collapsed) {{
+    var sidebar = getSidebar();
+    var btn     = getBtn();
+    var icon    = getIcon();
+    if (!sidebar || !btn || !icon) return;
+
+    if (collapsed) {{
+      // Thu sidebar
+      sidebar.style.transition  = 'width 0.28s ease, opacity 0.28s ease';
+      sidebar.style.width       = '0px';
+      sidebar.style.minWidth    = '0px';
+      sidebar.style.overflow    = 'hidden';
+      sidebar.style.opacity     = '0';
+      sidebar.style.visibility  = 'hidden';
+      icon.innerHTML = '&#8250;';   // ›
+      btn.style.left = '0px';
+    }} else {{
+      // Mở sidebar — xoá inline style để Streamlit tự quản lý kích thước
+      sidebar.style.transition  = 'width 0.28s ease, opacity 0.28s ease';
+      sidebar.style.width       = '';
+      sidebar.style.minWidth    = '';
+      sidebar.style.overflow    = '';
+      sidebar.style.opacity     = '';
+      sidebar.style.visibility  = '';
+      icon.innerHTML = '&#8249;';   // ‹
+      // Đợi CSS transition xong rồi tính lại vị trí nút
       setTimeout(function() {{
-        var sw = sidebar.offsetWidth || 300;
+        var sw = sidebar.getBoundingClientRect().width || sidebar.offsetWidth || 300;
         btn.style.left = sw + 'px';
       }}, 320);
     }}
-    localStorage.setItem('mtl_sidebar_collapsed', '0');
-  }}
-}};
-
-// Gắn vị trí nút theo chiều rộng sidebar thực tế
-(function positionBtn() {{
-  var sidebar = document.querySelector('section[data-testid="stSidebar"]');
-  var btn     = document.getElementById('mtl-sidebar-toggle');
-  if (!sidebar || !btn) {{ setTimeout(positionBtn, 200); return; }}
-
-  var collapsed = localStorage.getItem('mtl_sidebar_collapsed') === '1';
-  if (!collapsed) {{
-    var sw = sidebar.offsetWidth || 300;
-    btn.style.left = sw + 'px';
   }}
 
-  // Theo dõi resize sidebar (Streamlit thay đổi layout)
-  var ro = new ResizeObserver(function(entries) {{
-    if (!document.body.classList.contains('sidebar-collapsed')) {{
-      var sw = entries[0].contentRect.width;
-      if (sw > 0) btn.style.left = sw + 'px';
+  // Hàm toggle — gọi khi bấm nút
+  window.mtlToggleSidebar = function() {{
+    var next = !isCollapsed();
+    localStorage.setItem('mtl_sidebar_collapsed', next ? '1' : '0');
+    applyState(next);
+  }};
+
+  // Khởi tạo: đợi sidebar xuất hiện trong DOM rồi áp trạng thái
+  function init() {{
+    var sidebar = getSidebar();
+    var btn     = getBtn();
+    if (!sidebar || !btn) {{ setTimeout(init, 150); return; }}
+
+    var collapsed = isCollapsed();
+    applyState(collapsed);
+
+    // Đặt vị trí nút khi sidebar đang mở
+    if (!collapsed) {{
+      setTimeout(function() {{
+        var sw = sidebar.getBoundingClientRect().width || sidebar.offsetWidth || 300;
+        btn.style.left = sw + 'px';
+      }}, 200);
     }}
-  }});
-  ro.observe(sidebar);
+  }}
+
+  init();
+
 }})();
 </script>
 """, unsafe_allow_html=True)
