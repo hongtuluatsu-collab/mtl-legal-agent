@@ -119,14 +119,21 @@ st.markdown(f"""
 
 #MainMenu, footer {{ visibility: hidden; }}
 
-/* ── Font thương hiệu ── */
-html, body, [class*="css"], .stApp, .stMarkdown, p, div, span, label,
-input, textarea, select, button {{
+/* ── Font thương hiệu — KHÔNG ghi đè icon Streamlit ── */
+html, body, [class*="css"] {{
+    font-family: 'Be Vietnam Pro', sans-serif !important;
+}}
+.stMarkdown, .stMarkdown p, .stMarkdown div,
+.stTextInput label, .stTextArea label, .stSelectbox label,
+.stFileUploader label, .stButton > button,
+.stTabs [data-baseweb="tab"],
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"],
+[data-testid="stSidebarContent"] {{
     font-family: 'Be Vietnam Pro', sans-serif !important;
 }}
 h1, h2, h3, h4, h5,
-.mtl-header h1,
-.mtl-title-block h1 {{
+.mtl-header h1, .mtl-title-block h1,
+.login-title {{
     font-family: 'Playfair Display', serif !important;
 }}
 
