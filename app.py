@@ -218,40 +218,6 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     border-radius: 8px !important; font-weight: 600 !important;
 }}
 
-/* ── Sidebar toggle button ── */
-#mtl-sb-btn {{
-    position: fixed;
-    top: 50%;
-    left: 0;
-    transform: translateY(-50%);
-    z-index: 999999;
-    width: 22px;
-    height: 64px;
-    background: {MTL_NAVY};
-    border: 2px solid {MTL_GOLD};
-    border-left: none;
-    border-radius: 0 10px 10px 0;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: width 0.15s, background 0.15s;
-    box-shadow: 3px 0 12px rgba(30,77,130,0.35);
-}}
-#mtl-sb-btn:hover {{
-    width: 32px;
-    background: {MTL_GOLD};
-}}
-#mtl-sb-btn span {{
-    color: {MTL_GOLD};
-    font-size: 15px;
-    font-weight: 900;
-    pointer-events: none;
-    user-select: none;
-    line-height: 1;
-}}
-#mtl-sb-btn:hover span {{ color: white; }}
-
 /* Trạng thái sidebar — được điều khiển bằng dynamic <style> qua JS */
 section[data-testid="stSidebar"] {{
     transition: width .28s ease, opacity .28s ease, visibility .28s ease;
@@ -363,88 +329,64 @@ if not st.session_state.dang_nhap:
 """, unsafe_allow_html=True)
     st.stop()
 
-# ── Nút toggle: HTML qua st.markdown (main doc) + JS qua stc.html (iframe, dùng window.parent) ──
-# stc.html() LUÔN execute JS đúng, còn st.markdown có thể render script thành text.
-
-st.markdown(f"""
-<div id="mtl-sb-btn"
-     onclick="window.mtlToggle && window.mtlToggle()"
-     title="Bấm để thu/mở thanh bên"
-     style="position:fixed;top:50%;left:0;transform:translateY(-50%);
-            z-index:999999;width:22px;height:64px;
-            background:{MTL_NAVY};border:2px solid {MTL_GOLD};
-            border-left:none;border-radius:0 10px 10px 0;
-            cursor:pointer;display:flex;align-items:center;
-            justify-content:center;box-shadow:3px 0 12px rgba(30,77,130,.35);
-            transition:width .15s,background .15s;">
-  <span id="mtl-sb-ic"
-        style="color:{MTL_GOLD};font-size:16px;font-weight:900;
-               pointer-events:none;user-select:none;line-height:1;">&#8249;</span>
-</div>
-""", unsafe_allow_html=True)
-
-stc.html("""
+# ── Nút thu/mở sidebar — tạo thẳng vào parent document qua stc.html ──
+stc.html(f"""
 <script>
-(function(){
-  var LS='mtl_sb6', SID='mtl-sb-hide-css', obs=null;
-  var P=window.parent, PD=P.document;
+(function(){{
+  var P=window.parent, D=P.document;
+  var LS='mtl7', H=false;
 
-  function getSb(){ return PD.querySelector('section[data-testid="stSidebar"]'); }
-  function getBtn(){ return PD.getElementById('mtl-sb-btn'); }
-  function getIc(){ return PD.getElementById('mtl-sb-ic'); }
-  function hidden(){ return localStorage.getItem(LS)==='1'; }
+  // Xoá nút cũ nếu còn sót
+  var old=D.getElementById('mtl-t');
+  if(old) old.remove();
 
-  function style(){
-    var s=PD.getElementById(SID);
-    if(!s){
-      s=PD.createElement('style');
-      s.id=SID;
-      s.textContent='section[data-testid="stSidebar"]{width:0!important;min-width:0!important;overflow:hidden!important;visibility:hidden!important;opacity:0!important;transition:all .28s ease!important}';
-      PD.head.appendChild(s);
-    }
-    return s;
-  }
+  // Tạo nút mới gắn thẳng vào body của trang chính
+  var btn=D.createElement('div');
+  btn.id='mtl-t';
+  btn.style.cssText='position:fixed;top:50%;left:0;transform:translateY(-50%);'
+    +'z-index:999999;width:24px;height:62px;background:{MTL_NAVY};'
+    +'border:2px solid {MTL_GOLD};border-left:none;border-radius:0 10px 10px 0;'
+    +'cursor:pointer;display:flex;align-items:center;justify-content:center;'
+    +'box-shadow:3px 0 10px rgba(0,0,0,.25);transition:width .15s,background .15s;';
+  btn.innerHTML='<span style="color:{MTL_GOLD};font-size:17px;font-weight:900;'
+    +'pointer-events:none;user-select:none;">&#8249;</span>';
+  btn.onmouseenter=function(){{btn.style.width='32px';btn.style.background='{MTL_GOLD}';btn.querySelector('span').style.color='white';}};
+  btn.onmouseleave=function(){{btn.style.width='24px';btn.style.background='{MTL_NAVY}';btn.querySelector('span').style.color='{MTL_GOLD}';}};
+  D.body.appendChild(btn);
 
-  function apply(){ style().disabled=!hidden(); }
+  // Thẻ style để ẩn/hiện sidebar
+  var st=D.createElement('style');
+  st.id='mtl-s';
+  D.head.appendChild(st);
 
-  function sync(){
-    var b=getBtn(),ic=getIc(),sb=getSb();
-    if(!b||!ic)return;
-    if(hidden()){
-      ic.innerHTML='&#8250;';
-      b.style.left='0px';
-      b.title='Bấm de MO thanh ben';
-    }else{
-      ic.innerHTML='&#8249;';
-      var w=sb?sb.getBoundingClientRect().width:0;
-      b.style.left=(w>30?w:300)+'px';
-      b.title='Bấm de THU thanh ben';
-    }
-  }
+  function sidebar(){{ return D.querySelector('section[data-testid="stSidebar"]'); }}
 
-  P.mtlToggle=function(){
-    localStorage.setItem(LS,hidden()?'0':'1');
+  function apply(){{
+    st.textContent=H
+      ?'section[data-testid="stSidebar"]{{width:0!important;min-width:0!important;overflow:hidden!important;visibility:hidden!important;opacity:0!important;}}'
+      :'';
+    var sb=sidebar(), w=(!H&&sb)?sb.getBoundingClientRect().width:0;
+    btn.style.left=(w>30?w:H?0:300)+'px';
+    btn.querySelector('span').innerHTML=H?'&#8250;':'&#8249;';
+    btn.title=H?'Mo thanh ben':'Thu thanh ben';
+  }}
+
+  btn.onclick=function(){{
+    H=!H;
+    localStorage.setItem(LS,H?'1':'0');
     apply();
-    setTimeout(sync,300);
-    setTimeout(sync,750);
-  };
+    setTimeout(apply,350);
+  }};
 
-  function watch(){
-    if(obs)return;
-    var root=PD.querySelector('[data-testid="stAppViewContainer"]')||PD.body;
-    obs=new P.MutationObserver(function(){if(hidden())apply();});
-    obs.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class']});
-  }
-
-  function init(){
-    var sb=getSb(),b=getBtn();
-    if(!sb||!b){setTimeout(init,250);return;}
-    apply();sync();watch();
-    setInterval(sync,1000);
-  }
-
-  setTimeout(init,700);
-})();
+  // Khởi động
+  H=localStorage.getItem(LS)==='1';
+  function init(){{
+    if(!sidebar()){{setTimeout(init,300);return;}}
+    apply();
+    setInterval(apply,1200);
+  }}
+  setTimeout(init,800);
+}})();
 </script>
 """, height=0)
 
