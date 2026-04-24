@@ -749,6 +749,36 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
         _state = _qp.get("state", "")
 
         if _code and _state == nd["ten_tk"]:
+            _processed_key = f"gcode_{_code[:20]}"
+            if st.session_state.get(_processed_key):
+                st.query_params.clear()
+                st.rerun()
+            st.session_state[_processed_key] = True
+            try:
+                _flow = Flow.from_client_config(
+                    {"web": {
+                        "client_id": _CLIENT_ID,
+                        "client_secret": _CLIENT_SECRET,
+                        "redirect_uris": [_APP_URL.rstrip("/")],
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }},
+                    scopes=_SCOPES,
+                    redirect_uri=_APP_URL.rstrip("/"),
+                )
+                _flow.fetch_token(code=_code)
+                _creds = _flow.credentials
+                st.session_state[_cred_key] = _creds
+                try:
+                    _svc = build("oauth2", "v2", credentials=_creds)
+                    _info = _svc.userinfo().get().execute()
+                    st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
+                except Exception:
+                    pass
+                st.query_params.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Lỗi xác thực: {e}")
             # Nhận được code → đổi lấy token
             try:
                 _flow = Flow.from_client_config(
