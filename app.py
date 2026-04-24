@@ -117,25 +117,34 @@ st.markdown(f"""
 <style>
 #MainMenu, footer, header {{ visibility: hidden; }}
 
-/* Nút THU sidebar (« bên trong sidebar) — giữ hiển thị, style MTL */
-[data-testid="stSidebarCollapseButton"] button {{
-    color: {MTL_GOLD} !important;
-    background: transparent !important;
-    border: none !important;
-}}
-
-/* Nút MỞ sidebar (» hiện ra khi sidebar đã thu) — style nổi bật */
-[data-testid="collapsedControl"] {{
-    background: {MTL_NAVY} !important;
-    border: 2px solid {MTL_GOLD} !important;
-    border-left: none !important;
-    border-radius: 0 8px 8px 0 !important;
-    color: {MTL_GOLD} !important;
-}}
-
+/* ── Sidebar: ẩn vào cạnh trái, rê chuột vào thì trượt ra ── */
 section[data-testid="stSidebar"] {{
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    height: 100vh !important;
+    z-index: 9999 !important;
+    transform: translateX(calc(-100% + 14px)) !important;
+    transition: transform 0.32s cubic-bezier(0.4,0,0.2,1) !important;
     background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%) !important;
-    border-right: 2px solid {MTL_GOLD} !important;
+    border-right: 3px solid {MTL_GOLD} !important;
+    box-shadow: none !important;
+}}
+section[data-testid="stSidebar"]:hover {{
+    transform: translateX(0) !important;
+    box-shadow: 6px 0 30px rgba(0,0,0,0.45) !important;
+}}
+
+/* Main content chiếm full width vì sidebar đã fixed */
+[data-testid="stAppViewContainer"] > .main {{
+    margin-left: 14px !important;
+    padding-left: 0.5rem !important;
+}}
+
+/* Ẩn nút toggle gốc Streamlit (không cần nữa) */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"] {{
+    display: none !important;
 }}
 section[data-testid="stSidebar"] * {{ color: #e8eef5 !important; }}
 section[data-testid="stSidebar"] input {{
