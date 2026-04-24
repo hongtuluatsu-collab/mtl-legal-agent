@@ -144,8 +144,13 @@ h1, h2, h3, h4, h5,
 }}
 [data-testid="stMainBlockContainer"],
 .block-container {{
-    padding: 0 1rem 1rem 1rem !important;
+    padding: 0.75rem 1rem 1rem 1rem !important;
     max-width: 100% !important;
+}}
+
+/* Ẩn nút » khi sidebar bị thu — tránh hiện icon lạ */
+[data-testid="collapsedControl"] {{
+    display: none !important;
 }}
 
 /* Sidebar — chỉ màu sắc, không đụng layout */
