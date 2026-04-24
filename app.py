@@ -218,171 +218,110 @@ section[data-testid="stSidebar"] .stFileUploader button {{
 }}
 
 /* ── Sidebar toggle button ── */
-#mtl-sidebar-toggle {{
+#mtl-sb-btn {{
     position: fixed;
     top: 50%;
     left: 0;
     transform: translateY(-50%);
-    z-index: 9999;
-    width: 18px;
+    z-index: 999999;
+    width: 22px;
     height: 64px;
     background: {MTL_NAVY};
-    border: 1.5px solid {MTL_GOLD};
+    border: 2px solid {MTL_GOLD};
     border-left: none;
-    border-radius: 0 8px 8px 0;
+    border-radius: 0 10px 10px 0;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 2px 0 10px rgba(30,77,130,0.25);
-    transition: width 0.2s, background 0.2s;
+    transition: width 0.15s, background 0.15s;
+    box-shadow: 3px 0 12px rgba(30,77,130,0.35);
 }}
-#mtl-sidebar-toggle:hover {{
-    width: 24px;
+#mtl-sb-btn:hover {{
+    width: 32px;
     background: {MTL_GOLD};
 }}
-#mtl-sidebar-toggle .mtl-arrow {{
+#mtl-sb-btn span {{
     color: {MTL_GOLD};
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-    user-select: none;
-    transition: color 0.2s;
+    font-size: 15px;
+    font-weight: 900;
     pointer-events: none;
+    user-select: none;
+    line-height: 1;
 }}
-#mtl-sidebar-toggle:hover .mtl-arrow {{
-    color: white;
-}}
+#mtl-sb-btn:hover span {{ color: white; }}
 
-/* Trạng thái sidebar — được xử lý hoàn toàn bằng inline style qua JS */
+/* Đặt trên html element — React KHÔNG bao giờ đụng vào <html> */
+html.mtl-sb-off section[data-testid="stSidebar"] {{
+    width: 0px !important;
+    min-width: 0px !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    transition: all 0.28s ease !important;
+}}
 section[data-testid="stSidebar"] {{
-    transition: width 0.28s ease, opacity 0.28s ease;
+    transition: width 0.28s ease, opacity 0.28s ease, visibility 0.28s ease;
 }}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Inject toggle button + JS (dùng window.parent.document vì Streamlit render trong iframe) ──
+# ── Toggle button — dùng html.classList (React không đụng vào <html>) ──
 st.markdown(f"""
-<div id="mtl-sidebar-toggle" onclick="mtlToggleSidebar()" title="Thu/mở thanh bên">
-  <span class="mtl-arrow" id="mtl-arrow-icon">&#8249;</span>
+<div id="mtl-sb-btn" onclick="mtlToggle()" title="Thu/mở thanh bên (Click)">
+  <span id="mtl-sb-ic">&#8249;</span>
 </div>
 
 <script>
 (function() {{
+  var LS = 'mtl_sb3';
 
-  // ─────────────────────────────────────────────────────────────
-  //  MTL Sidebar Toggle  — hoạt động bằng cách kích nút gốc của
-  //  Streamlit thay vì tự thao tác DOM (đáng tin cậy hơn nhiều).
-  //
-  //  Streamlit có 2 nút:
-  //    • Đang mở  → data-testid="stSidebarCollapseButton" button  (thu)
-  //    • Đang thu → data-testid="collapsedControl"                (mở)
-  // ─────────────────────────────────────────────────────────────
+  function isOff()    {{ return document.documentElement.classList.contains('mtl-sb-off'); }}
+  function sidebar()  {{ return document.querySelector('section[data-testid="stSidebar"]'); }}
+  function btn()      {{ return document.getElementById('mtl-sb-btn'); }}
+  function icon()     {{ return document.getElementById('mtl-sb-ic'); }}
 
-  // Tìm nút thu sidebar (hiện khi sidebar đang mở)
-  function findCloseBtn() {{
-    return (
-      document.querySelector('[data-testid="stSidebarCollapseButton"] button') ||
-      document.querySelector('[data-testid="stSidebarNavCollapseButton"]')     ||
-      document.querySelector('button[aria-label="Close sidebar"]')              ||
-      document.querySelector('button[title="Close sidebar"]')
-    );
-  }}
-
-  // Tìm nút mở sidebar (hiện khi sidebar đang thu)
-  function findOpenBtn() {{
-    return (
-      document.querySelector('[data-testid="collapsedControl"]')    ||
-      document.querySelector('button[aria-label="Open sidebar"]')   ||
-      document.querySelector('button[title="Open sidebar"]')
-    );
-  }}
-
-  // Đọc trạng thái thực tế từ DOM (không dùng localStorage để tránh sai)
-  function isSidebarCollapsed() {{
-    var sb = document.querySelector('section[data-testid="stSidebar"]');
-    if (!sb) return true;
-    // Sidebar thu: Streamlit giảm width xuống gần 0 hoặc transform ra ngoài màn hình
-    var rect = sb.getBoundingClientRect();
-    return rect.width < 20;
-  }}
-
-  // Cập nhật icon và vị trí của nút toggle MTL
-  function syncBtn() {{
-    var btn  = document.getElementById('mtl-sidebar-toggle');
-    var icon = document.getElementById('mtl-arrow-icon');
-    var sb   = document.querySelector('section[data-testid="stSidebar"]');
-    if (!btn || !icon) return;
-
-    var collapsed = isSidebarCollapsed();
-    icon.innerHTML = collapsed ? '&#8250;' : '&#8249;';  // › hoặc ‹
-
-    if (collapsed) {{
-      btn.style.left = '0px';
-    }} else if (sb) {{
-      var sw = sb.getBoundingClientRect().width || 300;
-      btn.style.left = (sw > 0 ? sw : 300) + 'px';
-    }}
-  }}
-
-  // Hàm toggle chính — kích nút gốc của Streamlit
-  window.mtlToggleSidebar = function() {{
-    var collapsed = isSidebarCollapsed();
-
-    if (collapsed) {{
-      // Sidebar đang thu → tìm nút MỞ
-      var openBtn = findOpenBtn();
-      if (openBtn) {{
-        openBtn.click();
-      }} else {{
-        // Fallback: bỏ inline style để Streamlit tự mở lại
-        var sb = document.querySelector('section[data-testid="stSidebar"]');
-        if (sb) {{
-          sb.style.width = ''; sb.style.minWidth = '';
-          sb.style.overflow = ''; sb.style.visibility = '';
-          sb.style.opacity = ''; sb.style.transform = '';
-          sb.style.position = '';
-        }}
-      }}
+  function updateBtn() {{
+    var b = btn(), ic = icon(), sb = sidebar();
+    if (!b || !ic) return;
+    if (isOff()) {{
+      ic.innerHTML = '&#8250;';
+      b.style.left = '0px';
+      b.title = 'Bấm để MỞ thanh bên';
     }} else {{
-      // Sidebar đang mở → tìm nút THU
-      var closeBtn = findCloseBtn();
-      if (closeBtn) {{
-        closeBtn.click();
-      }} else {{
-        // Fallback: ẩn trực tiếp
-        var sb2 = document.querySelector('section[data-testid="stSidebar"]');
-        if (sb2) {{
-          sb2.style.transition = 'all 0.28s ease';
-          sb2.style.width = '0px'; sb2.style.minWidth = '0px';
-          sb2.style.overflow = 'hidden'; sb2.style.visibility = 'hidden';
-          sb2.style.opacity = '0';
-        }}
-      }}
+      ic.innerHTML = '&#8249;';
+      var sw = sb ? sb.getBoundingClientRect().width : 0;
+      b.style.left = (sw > 20 ? sw : 300) + 'px';
+      b.title = 'Bấm để THU thanh bên';
     }}
+  }}
 
-    // Cập nhật icon sau khi animation hoàn thành
-    setTimeout(syncBtn, 350);
-    setTimeout(syncBtn, 700);
+  window.mtlToggle = function() {{
+    var html = document.documentElement;
+    if (isOff()) {{
+      html.classList.remove('mtl-sb-off');
+      localStorage.setItem(LS, '0');
+    }} else {{
+      html.classList.add('mtl-sb-off');
+      localStorage.setItem(LS, '1');
+    }}
+    setTimeout(updateBtn, 320);
+    setTimeout(updateBtn, 700);
   }};
 
-  // Polling: đồng bộ vị trí nút mỗi 600ms (theo dõi thay đổi từ Streamlit rerun)
-  function startPolling() {{
-    setInterval(syncBtn, 600);
-  }}
-
-  // Khởi động
   function init() {{
-    var btn = document.getElementById('mtl-sidebar-toggle');
-    var sb  = document.querySelector('section[data-testid="stSidebar"]');
-    if (!btn || !sb) {{ setTimeout(init, 200); return; }}
-    syncBtn();
-    startPolling();
+    var sb = sidebar(), b = btn();
+    if (!sb || !b) {{ setTimeout(init, 200); return; }}
+
+    if (localStorage.getItem(LS) === '1') {{
+      document.documentElement.classList.add('mtl-sb-off');
+    }}
+
+    updateBtn();
+    setInterval(updateBtn, 800);
   }}
 
-  // Chạy sau khi DOM sẵn sàng
-  setTimeout(init, 300);
-
+  setTimeout(init, 400);
 }})();
 </script>
 """, unsafe_allow_html=True)
