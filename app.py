@@ -251,17 +251,9 @@ section[data-testid="stSidebar"] .stFileUploader button {{
 }}
 #mtl-sb-btn:hover span {{ color: white; }}
 
-/* Đặt trên html element — React KHÔNG bao giờ đụng vào <html> */
-html.mtl-sb-off section[data-testid="stSidebar"] {{
-    width: 0px !important;
-    min-width: 0px !important;
-    overflow: hidden !important;
-    visibility: hidden !important;
-    opacity: 0 !important;
-    transition: all 0.28s ease !important;
-}}
+/* Trạng thái sidebar — được điều khiển bằng dynamic <style> qua JS */
 section[data-testid="stSidebar"] {{
-    transition: width 0.28s ease, opacity 0.28s ease, visibility 0.28s ease;
+    transition: width .28s ease, opacity .28s ease, visibility .28s ease;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -370,59 +362,89 @@ if not st.session_state.dang_nhap:
 """, unsafe_allow_html=True)
     st.stop()
 
-# ── Toggle button — chỉ inject SAU khi đăng nhập thành công ──
-# (nằm sau st.stop() nên không xuất hiện trên trang đăng nhập)
+# ── Toggle button — inject SAU đăng nhập, dùng dynamic <style> + MutationObserver ──
 st.markdown(f"""
 <div id="mtl-sb-btn" onclick="mtlToggle()" title="Bấm để thu/mở thanh bên">
   <span id="mtl-sb-ic">&#8249;</span>
 </div>
 <script>
 (function() {{
-  var LS = 'mtl_sb3';
+  var LS  = 'mtl_sb5';
+  var SID = 'mtl-hide-style';
+  var _obs = null;
 
-  function isOff()   {{ return document.documentElement.classList.contains('mtl-sb-off'); }}
-  function getSb()   {{ return document.querySelector('section[data-testid="stSidebar"]'); }}
-  function getBtn()  {{ return document.getElementById('mtl-sb-btn'); }}
-  function getIc()   {{ return document.getElementById('mtl-sb-ic'); }}
+  function getSb()  {{ return document.querySelector('section[data-testid="stSidebar"]'); }}
+  function getBtn() {{ return document.getElementById('mtl-sb-btn'); }}
+  function getIc()  {{ return document.getElementById('mtl-sb-ic'); }}
+  function isHidden() {{ return localStorage.getItem(LS) === '1'; }}
 
-  function sync() {{
+  /* Tạo hoặc lấy lại thẻ <style> riêng của MTL trong <head> */
+  function getStyle() {{
+    var s = document.getElementById(SID);
+    if (!s) {{
+      s = document.createElement('style');
+      s.id  = SID;
+      s.textContent =
+        'section[data-testid="stSidebar"]{{' +
+        'width:0!important;min-width:0!important;' +
+        'overflow:hidden!important;visibility:hidden!important;' +
+        'opacity:0!important;transition:all .28s ease!important}}';
+      document.head.appendChild(s);
+    }}
+    return s;
+  }}
+
+  /* Áp trạng thái ẩn/hiện vào <style> */
+  function applyState() {{
+    var s = getStyle();
+    s.disabled = !isHidden();
+  }}
+
+  /* Cập nhật icon và vị trí nút */
+  function syncBtn() {{
     var b = getBtn(), ic = getIc(), sb = getSb();
     if (!b || !ic) return;
-    if (isOff()) {{
+    if (isHidden()) {{
       ic.innerHTML = '&#8250;';
       b.style.left = '0px';
-      b.setAttribute('title','Bấm để MỞ thanh bên');
+      b.title = 'Bấm để MỞ thanh bên';
     }} else {{
       ic.innerHTML = '&#8249;';
       var sw = sb ? sb.getBoundingClientRect().width : 0;
       b.style.left = (sw > 30 ? sw : 300) + 'px';
-      b.setAttribute('title','Bấm để THU thanh bên');
+      b.title = 'Bấm để THU thanh bên';
     }}
   }}
 
+  /* Hàm toggle — gọi khi bấm nút */
   window.mtlToggle = function() {{
-    var h = document.documentElement;
-    if (isOff()) {{
-      h.classList.remove('mtl-sb-off');
-      localStorage.setItem(LS,'0');
-    }} else {{
-      h.classList.add('mtl-sb-off');
-      localStorage.setItem(LS,'1');
-    }}
-    setTimeout(sync,300); setTimeout(sync,700);
+    localStorage.setItem(LS, isHidden() ? '0' : '1');
+    applyState();
+    setTimeout(syncBtn, 300);
+    setTimeout(syncBtn, 750);
   }};
+
+  /* MutationObserver: reapply khi Streamlit rerun thay đổi DOM sidebar */
+  function watchSidebar() {{
+    if (_obs) return;
+    var root = document.querySelector('[data-testid="stAppViewContainer"]') || document.body;
+    _obs = new MutationObserver(function() {{
+      if (isHidden()) applyState();
+    }});
+    _obs.observe(root, {{ childList:true, subtree:true, attributes:true,
+                          attributeFilter:['style','class'] }});
+  }}
 
   function init() {{
     var sb = getSb(), b = getBtn();
-    if (!sb || !b) {{ setTimeout(init,200); return; }}
-    if (localStorage.getItem(LS)==='1') {{
-      document.documentElement.classList.add('mtl-sb-off');
-    }}
-    sync();
-    setInterval(sync,900);
+    if (!sb || !b) {{ setTimeout(init, 250); return; }}
+    applyState();
+    syncBtn();
+    watchSidebar();
+    setInterval(syncBtn, 1000);
   }}
 
-  setTimeout(init,500);
+  setTimeout(init, 600);
 }})();
 </script>
 """, unsafe_allow_html=True)
