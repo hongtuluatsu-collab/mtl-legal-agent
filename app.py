@@ -257,7 +257,6 @@ def dang_xuat():
 if not st.session_state.dang_nhap:
     _, col, _ = st.columns([1, 1.6, 1])
     with col:
-        st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown(f"""
 <div class="login-card">
   <div style="display:flex;align-items:center;justify-content:center;gap:4px;margin-bottom:8px;">
@@ -283,38 +282,43 @@ if not st.session_state.dang_nhap:
             else:
                 st.error("❌ Sai tên đăng nhập hoặc mật khẩu.")
 
-        st.markdown("<p style='text-align:center;color:#bbb;font-size:0.75rem;margin-top:16px;'>© 2026 Công ty Luật TNHH Minh Tú</p>", unsafe_allow_html=True)
-        st.markdown(f"""
-<div style="margin-top:18px;padding-top:16px;border-top:1px solid #f0e8d8;">
-  <p style="text-align:center;font-size:0.7rem;color:{MTL_GOLD};font-weight:700;
-  letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;">Giá trị cốt lõi</p>
-  <div style="display:flex;justify-content:center;gap:8px;">
-    <div style="flex:1;text-align:center;padding:10px 6px;
+        st.markdown("<p style='text-align:center;color:#bbb;font-size:0.75rem;margin-top:12px;'>© 2026 Công ty Luật TNHH Minh Tú</p>", unsafe_allow_html=True)
+
+    # 3 giá trị cốt lõi — full width bên dưới
+    st.markdown(f"""
+<div style="max-width:700px;margin:24px auto 0;">
+  <p style="text-align:center;font-size:0.72rem;color:{MTL_GOLD};font-weight:700;
+  letter-spacing:2px;text-transform:uppercase;margin-bottom:14px;">✦ Giá trị cốt lõi ✦</p>
+  <div style="display:flex;gap:12px;">
+    <div style="flex:1;text-align:center;padding:16px 10px;
     background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
-    border-radius:10px;border:1px solid {MTL_GOLD}55;">
-      <div style="font-size:1.3rem;margin-bottom:4px;">🤝</div>
-      <div style="font-size:0.68rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1px;text-transform:uppercase;">Cam kết</div>
-      <div style="font-size:0.6rem;color:rgba(255,255,255,0.55);margin-top:3px;
-      line-height:1.4;">Tận tâm phục vụ<br>đến cùng</div>
+    border-radius:12px;border:1px solid {MTL_GOLD}55;
+    box-shadow:0 4px 15px rgba(30,77,130,0.2);">
+      <div style="font-size:1.6rem;margin-bottom:6px;">🤝</div>
+      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Cam kết</div>
+      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">
+      Tận tâm phục vụ đến cùng</div>
     </div>
-    <div style="flex:1;text-align:center;padding:10px 6px;
+    <div style="flex:1;text-align:center;padding:16px 10px;
     background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
-    border-radius:10px;border:1px solid {MTL_GOLD}55;">
-      <div style="font-size:1.3rem;margin-bottom:4px;">⚖️</div>
-      <div style="font-size:0.68rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1px;text-transform:uppercase;">Chính trực</div>
-      <div style="font-size:0.6rem;color:rgba(255,255,255,0.55);margin-top:3px;
-      line-height:1.4;">Minh bạch &<br>đạo đức nghề nghiệp</div>
+    border-radius:12px;border:1px solid {MTL_GOLD}55;
+    box-shadow:0 4px 15px rgba(30,77,130,0.2);">
+      <div style="font-size:1.6rem;margin-bottom:6px;">⚖️</div>
+      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Chính trực</div>
+      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">
+      Minh bạch & đạo đức nghề nghiệp</div>
     </div>
-    <div style="flex:1;text-align:center;padding:10px 6px;
+    <div style="flex:1;text-align:center;padding:16px 10px;
     background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
-    border-radius:10px;border:1px solid {MTL_GOLD}55;">
-      <div style="font-size:1.3rem;margin-bottom:4px;">📚</div>
-      <div style="font-size:0.68rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1px;text-transform:uppercase;">Học hỏi</div>
-      <div style="font-size:0.6rem;color:rgba(255,255,255,0.55);margin-top:3px;
-      line-height:1.4;">Không ngừng<br>trau dồi kiến thức</div>
+    border-radius:12px;border:1px solid {MTL_GOLD}55;
+    box-shadow:0 4px 15px rgba(30,77,130,0.2);">
+      <div style="font-size:1.6rem;margin-bottom:6px;">📚</div>
+      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};
+      letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Học hỏi</div>
+      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">
+      Không ngừng trau dồi kiến thức</div>
     </div>
   </div>
 </div>
