@@ -694,13 +694,39 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
     _CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
     _CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
     _REDIRECT_URI  = "https://web-production-57eec.up.railway.app"
-    _SCOPES        = [
+    _SCOPES = [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
     ]
-    _cred_key    = f"gcred_{nd['ten_tk']}"
-    _pending_key = f"pending_code_{nd['ten_tk']}"
-    _done_key    = f"done_code_{nd['ten_tk']}"
+    _cred_key = f"gcred_{nd['ten_tk']}"
+
+    # Cache đảm bảo mỗi code chỉ được exchange ĐÚNG 1 LẦN
+    # dù Streamlit chạy bao nhiêu thread/rerun đi nữa
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _do_exchange(code, client_id, client_secret, redirect_uri):
+        import requests as _r
+        resp = _r.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code":          code,
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "redirect_uri":  redirect_uri,
+                "grant_type":    "authorization_code",
+            },
+            timeout=15,
+        )
+        return resp.json()
+
+    def _get_email(access_token):
+        try:
+            return _rq.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=8,
+            ).json().get("email", "")
+        except Exception:
+            return ""
 
     def _is_connected():
         c = st.session_state.get(_cred_key)
@@ -714,62 +740,34 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                 return False
         return c.valid
 
-    def _exchange_token(code):
-        """Đổi code lấy token — chỉ gọi 1 lần duy nhất."""
-        resp = _rq.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "code":          code,
-                "client_id":     _CLIENT_ID,
-                "client_secret": _CLIENT_SECRET,
-                "redirect_uri":  _REDIRECT_URI,
-                "grant_type":    "authorization_code",
-            },
-            timeout=15,
-        )
-        return resp.json()
-
     if not _CLIENT_ID or not _CLIENT_SECRET:
-        st.error("Thiếu GOOGLE_CLIENT_ID hoặc CLIENT_SECRET trong Railway")
+        st.error("Thiếu GOOGLE_CLIENT_ID hoặc CLIENT_SECRET")
 
     elif _is_connected():
-        _email_disp = st.session_state.get(f"gemail_{nd['ten_tk']}", "Gmail")
+        _em = st.session_state.get(f"gemail_{nd['ten_tk']}", "Gmail")
         st.markdown(
             f"<div style='background:rgba(100,180,100,0.15);border:1px solid #4a9a4a;"
             f"border-radius:8px;padding:8px 10px;font-size:0.78rem;color:#90ee90;'>"
-            f"✅ {_email_disp}</div>",
+            f"✅ {_em}</div>",
             unsafe_allow_html=True,
         )
         if st.button("↩ Ngắt kết nối", use_container_width=True,
                      key=f"gdisconn_{nd['ten_tk']}"):
-            for _k in [_cred_key, f"gemail_{nd['ten_tk']}", _pending_key, _done_key]:
-                st.session_state.pop(_k, None)
+            st.session_state.pop(_cred_key, None)
+            st.session_state.pop(f"gemail_{nd['ten_tk']}", None)
             st.rerun()
 
     else:
-        # ══ PHASE 1: Phát hiện code trong URL → lưu vào session, xoá URL ngay ══
         _qp    = st.query_params
         _code  = _qp.get("code", "")
         _state = _qp.get("state", "")
 
         if _code and _state == nd["ten_tk"]:
-            _prev = st.session_state.get(_pending_key, "")
-            if _prev != _code:
-                # Lần đầu thấy code này → lưu vào session
-                st.session_state[_pending_key] = _code
-                st.session_state.pop(_done_key, None)
-            # Xoá URL ngay — sau đây chỉ còn 1 lần chạy sạch
+            # Xoá URL ngay để tránh các rerun sau thấy lại code
             st.query_params.clear()
-            st.rerun()
 
-        # ══ PHASE 2: URL đã sạch → exchange token (chạy đúng 1 lần) ══
-        elif st.session_state.get(_pending_key) and not st.session_state.get(_done_key):
-            _saved_code = st.session_state[_pending_key]
-            # Đánh dấu "đang xử lý" TRƯỚC KHI gọi API
-            st.session_state[_done_key] = True
-
-            with st.spinner("Đang xác thực với Google..."):
-                _tok = _exchange_token(_saved_code)
+            # Gọi hàm đã được cache — dù gọi nhiều lần cũng chỉ POST 1 lần
+            _tok = _do_exchange(_code, _CLIENT_ID, _CLIENT_SECRET, _REDIRECT_URI)
 
             if "access_token" in _tok:
                 _creds = Credentials(
@@ -781,27 +779,14 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                     scopes=_SCOPES,
                 )
                 st.session_state[_cred_key] = _creds
-                st.session_state.pop(_pending_key, None)
-                # Lấy email
-                try:
-                    _me = _rq.get(
-                        "https://www.googleapis.com/oauth2/v2/userinfo",
-                        headers={"Authorization": f"Bearer {_tok['access_token']}"},
-                        timeout=8,
-                    ).json()
-                    st.session_state[f"gemail_{nd['ten_tk']}"] = _me.get("email", "")
-                except Exception:
-                    pass
+                st.session_state[f"gemail_{nd['ten_tk']}"] = _get_email(_tok["access_token"])
                 st.rerun()
             else:
-                # Thất bại → cho thử lại
-                st.session_state.pop(_pending_key, None)
-                st.session_state.pop(_done_key, None)
                 _err = _tok.get("error_description", _tok.get("error", "?"))
-                st.error(f"❌ Lỗi: {_err} — vui lòng nhấn đăng nhập lại")
+                st.error(f"❌ Lỗi: {_err}")
 
         else:
-            # ══ Hiện nút đăng nhập ══
+            # Nút đăng nhập
             import urllib.parse as _up
             _auth_url = (
                 "https://accounts.google.com/o/oauth2/v2/auth?"
@@ -817,9 +802,9 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
             )
             st.markdown(
                 f'<a href="{_auth_url}" target="_self">'
-                f'<button style="width:100%;background:#4285F4;color:white;border:none;'
-                f'border-radius:8px;padding:9px;font-size:0.85rem;font-weight:600;'
-                f'cursor:pointer;">'
+                f'<button style="width:100%;background:#4285F4;color:white;'
+                f'border:none;border-radius:8px;padding:9px;font-size:0.85rem;'
+                f'font-weight:600;cursor:pointer;">'
                 f'🔐 Đăng nhập với Google</button></a>',
                 unsafe_allow_html=True,
             )
