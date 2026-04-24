@@ -117,6 +117,17 @@ st.markdown(f"""
 <style>
 #MainMenu, footer, header {{ visibility: hidden; }}
 
+/* Nền thương hiệu MTL toàn trang */
+.stApp {{
+    background: linear-gradient(135deg, #0d1f35 0%, {MTL_NAVY2} 40%, {MTL_NAVY} 100%) !important;
+}}
+[data-testid="stAppViewContainer"] > .main {{
+    background: transparent !important;
+}}
+[data-testid="stMainBlockContainer"] {{
+    background: transparent !important;
+}}
+
 section[data-testid="stSidebar"] {{
     background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%) !important;
     border-right: 2px solid {MTL_GOLD} !important;
@@ -203,12 +214,55 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     padding: 20px 24px; border-radius: 0 10px 10px 0; margin-top: 16px; line-height: 1.75;
 }}
 .stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 2px solid {MTL_GOLD}44; }}
-.stTabs [data-baseweb="tab"] {{ border-radius: 8px 8px 0 0 !important; font-weight: 600 !important; padding: 8px 18px !important; }}
+.stTabs [data-baseweb="tab"] {{ border-radius: 8px 8px 0 0 !important; font-weight: 600 !important; padding: 8px 18px !important; color: {MTL_GOLD2} !important; }}
 .stTabs [aria-selected="true"] {{ background: {MTL_NAVY} !important; color: white !important; border-bottom: 2px solid {MTL_GOLD} !important; }}
-.stButton > button {{ border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s !important; }}
+.stTabs [aria-selected="false"]:hover {{ background: rgba(255,255,255,0.08) !important; color: white !important; }}
+
+/* Text màu sáng trên nền tối */
+.stMarkdown, .stText, p, label, .stSelectbox label,
+.stTextInput label, .stTextArea label, .stFileUploader label {{
+    color: #dce8f5 !important;
+}}
+h1, h2, h3, h4 {{ color: white !important; }}
+
+/* Input, select, textarea trên nền tối */
+.stTextInput input, .stTextArea textarea, .stSelectbox select,
+div[data-baseweb="select"] {{ 
+    background: rgba(255,255,255,0.08) !important;
+    border: 1px solid {MTL_GOLD}55 !important;
+    color: white !important;
+    border-radius: 8px !important;
+}}
+div[data-baseweb="select"] span {{ color: white !important; }}
+
+/* Cards / expander nền trong suốt */
+div[data-testid="stExpander"] {{
+    background: rgba(255,255,255,0.06) !important;
+    border: 1px solid {MTL_GOLD}33 !important;
+    border-radius: 10px !important;
+}}
+div[data-testid="stExpander"] summary {{ color: {MTL_GOLD2} !important; }}
+
+/* Metric cards */
+div[data-testid="stMetric"] {{
+    background: rgba(255,255,255,0.07) !important;
+    border: 1px solid {MTL_GOLD}33 !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+}}
+div[data-testid="stMetricLabel"] {{ color: {MTL_GOLD2} !important; }}
+div[data-testid="stMetricValue"] {{ color: white !important; }}
+
+/* Chat messages */
+div[data-testid="stChatMessage"] {{
+    background: rgba(255,255,255,0.06) !important;
+    border-radius: 10px !important;
+}}
+
+.stButton > button {{ border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s !important; color: {MTL_GOLD2} !important; border: 1px solid {MTL_GOLD}55 !important; background: rgba(255,255,255,0.06) !important; }}
 .stButton > button[kind="primary"] {{
     background: linear-gradient(135deg, {MTL_NAVY} 0%, {MTL_NAVY2} 100%) !important;
-    border: none !important; color: white !important;
+    border: 1px solid {MTL_GOLD}77 !important; color: white !important;
     box-shadow: 0 2px 8px rgba(30,77,130,0.3) !important;
 }}
 .stDownloadButton > button {{
