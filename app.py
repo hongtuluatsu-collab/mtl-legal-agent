@@ -749,64 +749,58 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
         _clean_url = _APP_URL.strip().rstrip("/")
 
         if _code and _state == nd["ten_tk"]:
-            # Dùng requests gọi thẳng Google Token API — không qua Flow
-            import requests as _http
-            _done_key = f"oauth_done_{_code[:28]}"
+            # Lưu code vào session state NGAY LẬP TỨC để tránh Streamlit xử lý 2 lần
+            _code_key = f"oauth_code_{nd['ten_tk']}"
+            _saved_code = st.session_state.get(_code_key)
 
-            if st.session_state.get(_cred_key) and st.session_state[_cred_key].valid:
-                # Đã có credentials hợp lệ → chỉ xoá params
+            # Nếu đã có credentials hợp lệ → xoá params và xong
+            if st.session_state.get(_cred_key) and st.session_state.get(_cred_key).valid:
                 st.query_params.clear()
                 st.rerun()
-            elif not st.session_state.get(_done_key):
-                st.session_state[_done_key] = True
-                with st.spinner("Đang xác thực với Google..."):
-                    _tok = _http.post(
-                        "https://oauth2.googleapis.com/token",
-                        data={
-                            "code":          _code,
+            # Nếu code này chưa được xử lý → xử lý ngay
+            elif _saved_code != _code:
+                st.session_state[_code_key] = _code  # đánh dấu code đang xử lý
+                _full_resp_url = f"{_clean_url}?code={_code}&state={_state}"
+                try:
+                    import os as _os
+                    _os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "0"
+                    _flow2 = Flow.from_client_config(
+                        {"web": {
                             "client_id":     _CLIENT_ID,
                             "client_secret": _CLIENT_SECRET,
-                            "redirect_uri":  _clean_url,
-                            "grant_type":    "authorization_code",
-                        },
-                        timeout=15,
-                    ).json()
-
-                if "error" in _tok:
-                    # KHÔNG reset _done_key — tránh dùng lại code đã hết hạn
-                    _err = _tok.get("error","")
-                    _desc = _tok.get("error_description","")
-                    st.error("🔴 Xác thực Google thất bại — vui lòng thử lại từ đầu")
-                    st.code(
-                        f"redirect_uri : {_clean_url}\n"
-                        f"error        : {_err}\n"
-                        f"description  : {_desc}",
-                        language="text"
-                    )
-                    st.info("👉 Nhấn 'Đăng nhập với Google' lần nữa để lấy mã mới")
-                else:
-                    # Tạo Credentials thủ công từ token nhận được
-                    _creds = Credentials(
-                        token=_tok["access_token"],
-                        refresh_token=_tok.get("refresh_token"),
-                        token_uri="https://oauth2.googleapis.com/token",
-                        client_id=_CLIENT_ID,
-                        client_secret=_CLIENT_SECRET,
+                            "redirect_uris": [_clean_url],
+                            "auth_uri":  "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }},
                         scopes=_SCOPES,
+                        redirect_uri=_clean_url,
+                        state=_state,
                     )
+                    # Truyền toàn bộ URL callback — cách chuẩn của Google
+                    _flow2.fetch_token(authorization_response=_full_resp_url)
+                    _creds = _flow2.credentials
                     st.session_state[_cred_key] = _creds
-                    # Lấy địa chỉ email
+                    # Lấy email
                     try:
-                        _info = _http.get(
+                        import requests as _rq
+                        _info = _rq.get(
                             "https://www.googleapis.com/oauth2/v2/userinfo",
-                            headers={"Authorization": f"Bearer {_tok['access_token']}"},
+                            headers={"Authorization": f"Bearer {_creds.token}"},
                             timeout=10,
                         ).json()
-                        st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email", "")
+                        st.session_state[f"gemail_{nd['ten_tk']}"] = _info.get("email","")
                     except Exception:
                         pass
                     st.query_params.clear()
                     st.rerun()
+                except Exception as _ex:
+                    st.session_state.pop(_code_key, None)  # reset để thử lại
+                    st.error("🔴 Xác thực thất bại — nhấn lại nút Đăng nhập với Google")
+                    st.code(str(_ex), language="text")
+            else:
+                # Code này đã được xử lý rồi nhưng chưa có credentials → hướng dẫn thử lại
+                st.warning("⚠️ Phiên đăng nhập cũ — nhấn lại nút bên dưới để thử lại")
+                st.session_state.pop(_code_key, None)
         else:
             # Tạo URL đăng nhập Google — dùng urlencode chuẩn
             _auth_url = (
