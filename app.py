@@ -245,7 +245,122 @@ section[data-testid="stSidebar"] .stFileUploader button {{
     border-top: 1px solid #e0e8f5; border-right: 1px solid #e0e8f5; border-bottom: 1px solid #e0e8f5;
     padding: 20px 24px; border-radius: 0 10px 10px 0; margin-top: 16px; line-height: 1.75;
 }}
-.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 2px solid {MTL_GOLD}44; }}
+/* ══════════════════════════════════════
+   MOBILE RESPONSIVE — max-width: 768px
+   ══════════════════════════════════════ */
+@media (max-width: 768px) {{
+
+  /* Padding tổng thể nhỏ lại */
+  [data-testid="stMainBlockContainer"],
+  .block-container {{
+    padding: 0.4rem 0.5rem 1rem 0.5rem !important;
+  }}
+
+  /* Header co lại trên mobile */
+  .mtl-header-inner {{
+    padding: 12px 14px !important;
+    min-height: 60px !important;
+    gap: 10px !important;
+    flex-wrap: wrap;
+  }}
+  .mtl-box {{
+    width: 28px !important; height: 28px !important;
+    font-size: 0.85rem !important; border-radius: 5px !important;
+  }}
+  .mtl-divider {{ height: 34px !important; margin: 0 6px !important; }}
+  .mtl-title-block h1 {{ font-size: 0.9rem !important; }}
+  .mtl-title-block .mtl-sub {{ font-size: 0.65rem !important; display: none; }}
+  .mtl-user-badge {{ padding: 5px 10px !important; }}
+  .mtl-user-badge .name {{ font-size: 0.75rem !important; }}
+  .mtl-user-badge .role {{ font-size: 0.65rem !important; }}
+  .mtl-user-badge .date {{ font-size: 0.6rem !important; }}
+
+  /* Values bar ẩn trên mobile nhỏ — tiết kiệm không gian */
+  [data-testid="stMarkdownContainer"] > div[style*="background:linear-gradient(90deg"] {{
+    display: none !important;
+  }}
+
+  /* Tabs — cuộn ngang thay vì wrap */
+  .stTabs [data-baseweb="tab-list"] {{
+    overflow-x: auto !important;
+    flex-wrap: nowrap !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }}
+  .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
+  .stTabs [data-baseweb="tab"] {{
+    padding: 6px 12px !important;
+    font-size: 0.78rem !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+  }}
+
+  /* Columns tự động stack dọc */
+  [data-testid="stHorizontalBlock"] {{
+    flex-direction: column !important;
+  }}
+  [data-testid="stHorizontalBlock"] > [data-testid="stVerticalBlock"] {{
+    width: 100% !important;
+    min-width: 100% !important;
+  }}
+
+  /* Sidebar — nhỏ hơn trên mobile */
+  section[data-testid="stSidebar"] > div {{
+    padding: 0.5rem !important;
+  }}
+  section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+    padding: 8px !important;
+  }}
+
+  /* Nút fullwidth trên mobile */
+  .stButton > button {{
+    font-size: 0.82rem !important;
+    padding: 8px 12px !important;
+  }}
+
+  /* Text area nhỏ hơn */
+  .stTextArea textarea {{
+    min-height: 80px !important;
+    font-size: 0.85rem !important;
+  }}
+
+  /* Metrics — 2 cột thay vì 4 */
+  [data-testid="stMetric"] {{
+    min-width: 45% !important;
+  }}
+
+  /* Login card */
+  .login-card {{
+    padding: 20px 18px 16px !important;
+    border-radius: 12px !important;
+    margin: 0 8px !important;
+  }}
+  .login-title {{ font-size: 1.1rem !important; }}
+
+  /* File uploader */
+  [data-testid="stFileUploader"] {{
+    font-size: 0.8rem !important;
+  }}
+
+  /* Result box */
+  .result-box {{
+    padding: 12px 14px !important;
+    font-size: 0.88rem !important;
+  }}
+
+  /* Header margin nhỏ lại */
+  .mtl-header {{ margin-bottom: 8px !important; border-radius: 8px !important; }}
+}}
+
+/* Màn hình rất nhỏ (< 480px) */
+@media (max-width: 480px) {{
+  .mtl-user-badge {{ display: none !important; }}
+  .mtl-header-inner {{ padding: 10px 12px !important; }}
+  .stTabs [data-baseweb="tab"] {{
+    padding: 5px 9px !important;
+    font-size: 0.72rem !important;
+  }}
+}}
 .stTabs [data-baseweb="tab"] {{ border-radius: 8px 8px 0 0 !important; font-weight: 600 !important; padding: 8px 18px !important; }}
 .stTabs [aria-selected="true"] {{ background: {MTL_NAVY} !important; color: white !important; border-bottom: 2px solid {MTL_GOLD} !important; }}
 .stButton > button {{ border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s !important; }}
