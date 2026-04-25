@@ -722,84 +722,8 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
 </div>""", unsafe_allow_html=True)
 
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:4px 0 12px;'></div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📂 Tải hồ sơ lên</div>", unsafe_allow_html=True)
 
-    files_upload = st.file_uploader(
-        "Chọn file",
-        type=["pdf", "docx", "png", "jpg", "jpeg", "tiff", "bmp"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-    )
-
-    if "noi_dung_files" not in st.session_state:
-        st.session_state.noi_dung_files = []
-
-    if files_upload:
-        st.session_state.noi_dung_files = []
-        for f in files_upload:
-            data = f.read()
-            ext  = f.name.rsplit(".", 1)[-1].lower()
-            if ext == "pdf":
-                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "pdf", "du_lieu": doc_pdf(data)})
-            elif ext == "docx":
-                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "docx", "du_lieu": doc_docx(data)})
-            elif ext in ["png", "jpg", "jpeg", "tiff", "bmp"]:
-                media = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "tiff": "image/tiff", "bmp": "image/bmp"}
-                st.session_state.noi_dung_files.append({
-                    "ten": f.name, "loai": "anh",
-                    "du_lieu": base64.standard_b64encode(data).decode(),
-                    "media_type": media.get(ext, "image/jpeg"),
-                })
-        if st.session_state.noi_dung_files:
-            st.success(f"✅ Đã tải {len(st.session_state.noi_dung_files)} file")
-            for item in st.session_state.noi_dung_files:
-                icon = "🖼️" if item["loai"] == "anh" else "📄"
-                st.markdown(f"<div style='font-size:0.8rem;padding:2px 0;'>{icon} {item['ten']}</div>", unsafe_allow_html=True)
-
-    st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:12px 0;'></div>", unsafe_allow_html=True)
-
-    # ── Giá trị cốt lõi ở sidebar ──
-    st.markdown(f"""
-<div style="margin-bottom:12px;">
-  <div style="font-size:0.62rem;color:{MTL_GOLD};letter-spacing:2px;font-weight:700;
-  text-transform:uppercase;text-align:center;margin-bottom:8px;">Giá trị cốt lõi</div>
-  <div style="display:flex;flex-direction:column;gap:5px;">
-    <div style="display:flex;align-items:center;gap:8px;background:rgba(168,135,74,0.1);
-    border-left:2px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:6px 10px;">
-      <span style="font-size:0.9rem;">🤝</span>
-      <div>
-        <div style="font-size:0.7rem;font-weight:700;color:{MTL_GOLD};letter-spacing:0.5px;">CAM KẾT</div>
-        <div style="font-size:0.62rem;color:rgba(232,238,245,0.5);margin-top:1px;">Tận tâm phục vụ đến cùng</div>
-      </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;background:rgba(168,135,74,0.1);
-    border-left:2px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:6px 10px;">
-      <span style="font-size:0.9rem;">⚖️</span>
-      <div>
-        <div style="font-size:0.7rem;font-weight:700;color:{MTL_GOLD};letter-spacing:0.5px;">CHÍNH TRỰC</div>
-        <div style="font-size:0.62rem;color:rgba(232,238,245,0.5);margin-top:1px;">Minh bạch & đạo đức nghề nghiệp</div>
-      </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;background:rgba(168,135,74,0.1);
-    border-left:2px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:6px 10px;">
-      <span style="font-size:0.9rem;">📚</span>
-      <div>
-        <div style="font-size:0.7rem;font-weight:700;color:{MTL_GOLD};letter-spacing:0.5px;">HỌC HỎI</div>
-        <div style="font-size:0.62rem;color:rgba(232,238,245,0.5);margin-top:1px;">Không ngừng trau dồi kiến thức</div>
-      </div>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-    if st.button("🚪 Đăng xuất", use_container_width=True):
-        dang_xuat()
-
-    # ── GMAIL OAuth ────────────────────────────────────
-    st.markdown(
-        f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:12px 0;'></div>",
-        unsafe_allow_html=True,
-    )
+    # ── GMAIL OAuth — lên đầu để dễ thấy ──────────────
     st.markdown(
         f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;"
         f"text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📧 Gmail</div>",
@@ -928,6 +852,42 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                 unsafe_allow_html=True,
             )
             st.caption("Dùng mật khẩu Gmail thông thường")
+
+    # ── TẢI HỒ SƠ — sau Gmail ──────────────────────────
+    st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:12px 0 10px;'></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📂 Tải hồ sơ lên</div>", unsafe_allow_html=True)
+
+    files_upload = st.file_uploader(
+        "Chọn file",
+        type=["pdf", "docx", "png", "jpg", "jpeg", "tiff", "bmp"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+    )
+
+    if "noi_dung_files" not in st.session_state:
+        st.session_state.noi_dung_files = []
+
+    if files_upload:
+        st.session_state.noi_dung_files = []
+        for f in files_upload:
+            data = f.read()
+            ext  = f.name.rsplit(".", 1)[-1].lower()
+            if ext == "pdf":
+                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "pdf", "du_lieu": doc_pdf(data)})
+            elif ext == "docx":
+                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "docx", "du_lieu": doc_docx(data)})
+            elif ext in ["png", "jpg", "jpeg", "tiff", "bmp"]:
+                media = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "tiff": "image/tiff", "bmp": "image/bmp"}
+                st.session_state.noi_dung_files.append({
+                    "ten": f.name, "loai": "anh",
+                    "du_lieu": base64.standard_b64encode(data).decode(),
+                    "media_type": media.get(ext, "image/jpeg"),
+                })
+        if st.session_state.noi_dung_files:
+            st.success(f"✅ Đã tải {len(st.session_state.noi_dung_files)} file")
+            for item in st.session_state.noi_dung_files:
+                icon = "🖼️" if item["loai"] == "anh" else "📄"
+                st.markdown(f"<div style='font-size:0.8rem;padding:2px 0;'>{icon} {item['ten']}</div>", unsafe_allow_html=True)
 # ── HEADER ──
 st.markdown(f"""
 <div class="mtl-header">
@@ -945,10 +905,29 @@ st.markdown(f"""
     <div class="mtl-user-badge">
       <div class="name">{nd['ho_ten']}</div>
       <div class="role">{nd['chuc_vu']}</div>
-      <div class="date">{datetime.now().strftime('%d/%m/%Y  %H:%M')}</div>
+      <div class="date" id="mtl-realtime-clock">{datetime.now().strftime('%d/%m/%Y  %H:%M')}</div>
     </div>
   </div>
 </div>
+<script>
+(function(){{
+  function updateClock() {{
+    var el = document.getElementById('mtl-realtime-clock');
+    if (!el) el = window.parent && window.parent.document.getElementById('mtl-realtime-clock');
+    if (!el) {{ setTimeout(updateClock, 500); return; }}
+    var now = new Date();
+    var d = String(now.getDate()).padStart(2,'0');
+    var m = String(now.getMonth()+1).padStart(2,'0');
+    var y = now.getFullYear();
+    var h = String(now.getHours()).padStart(2,'0');
+    var mi = String(now.getMinutes()).padStart(2,'0');
+    var s = String(now.getSeconds()).padStart(2,'0');
+    el.textContent = d+'/'+m+'/'+y+'  '+h+':'+mi+':'+s;
+    setTimeout(updateClock, 1000);
+  }}
+  setTimeout(updateClock, 500);
+}})();
+</script>
 
 <!-- Thanh giá trị cốt lõi -->
 <div style="background:linear-gradient(90deg,{MTL_NAVY2} 0%,#122d50 100%);
