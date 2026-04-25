@@ -12,6 +12,7 @@ Chạy app:
 """
 
 import streamlit as st
+import streamlit.components.v1 as stc
 import anthropic
 import base64
 import io
@@ -888,6 +889,11 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
             for item in st.session_state.noi_dung_files:
                 icon = "🖼️" if item["loai"] == "anh" else "📄"
                 st.markdown(f"<div style='font-size:0.8rem;padding:2px 0;'>{icon} {item['ten']}</div>", unsafe_allow_html=True)
+
+    # ── ĐĂNG XUẤT — cuối sidebar ──
+    st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:16px 0 10px;'></div>", unsafe_allow_html=True)
+    if st.button("🚪 Đăng xuất", use_container_width=True, key="btn_logout"):
+        dang_xuat()
 # ── HEADER ──
 st.markdown(f"""
 <div class="mtl-header">
@@ -905,29 +911,10 @@ st.markdown(f"""
     <div class="mtl-user-badge">
       <div class="name">{nd['ho_ten']}</div>
       <div class="role">{nd['chuc_vu']}</div>
-      <div class="date" id="mtl-realtime-clock">{datetime.now().strftime('%d/%m/%Y  %H:%M')}</div>
+      <div class="date" id="mtl-clock">--/--/----  --:--:--</div>
     </div>
   </div>
 </div>
-<script>
-(function(){{
-  function updateClock() {{
-    var el = document.getElementById('mtl-realtime-clock');
-    if (!el) el = window.parent && window.parent.document.getElementById('mtl-realtime-clock');
-    if (!el) {{ setTimeout(updateClock, 500); return; }}
-    var now = new Date();
-    var d = String(now.getDate()).padStart(2,'0');
-    var m = String(now.getMonth()+1).padStart(2,'0');
-    var y = now.getFullYear();
-    var h = String(now.getHours()).padStart(2,'0');
-    var mi = String(now.getMinutes()).padStart(2,'0');
-    var s = String(now.getSeconds()).padStart(2,'0');
-    el.textContent = d+'/'+m+'/'+y+'  '+h+':'+mi+':'+s;
-    setTimeout(updateClock, 1000);
-  }}
-  setTimeout(updateClock, 500);
-}})();
-</script>
 
 <!-- Thanh giá trị cốt lõi -->
 <div style="background:linear-gradient(90deg,{MTL_NAVY2} 0%,#122d50 100%);
@@ -968,6 +955,30 @@ display:flex;align-items:center;justify-content:center;min-height:48px;">
   font-style:italic;white-space:nowrap;letter-spacing:0.5px;">OUR EXPERIENCE IS YOUR SUCCESS</div>
 </div>
 """, unsafe_allow_html=True)
+
+# ── Đồng hồ realtime Vietnam (UTC+7) — dùng stc.html để JS execute được ──
+stc.html("""
+<script>
+(function(){
+  function tick() {
+    var el = window.parent.document.getElementById('mtl-clock');
+    if (!el) { setTimeout(tick, 400); return; }
+    var now = new Date();
+    // Chuyển sang giờ Việt Nam (UTC+7)
+    var vn = new Date(now.toLocaleString('en-US', {timeZone: 'Asia/Ho_Chi_Minh'}));
+    var d  = String(vn.getDate()).padStart(2,'0');
+    var mo = String(vn.getMonth()+1).padStart(2,'0');
+    var y  = vn.getFullYear();
+    var h  = String(vn.getHours()).padStart(2,'0');
+    var mi = String(vn.getMinutes()).padStart(2,'0');
+    var s  = String(vn.getSeconds()).padStart(2,'0');
+    el.textContent = d+'/'+mo+'/'+y+'  '+h+':'+mi+':'+s;
+    setTimeout(tick, 1000);
+  }
+  setTimeout(tick, 500);
+})();
+</script>
+""", height=0)
 
 # ── TABS ──
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
