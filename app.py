@@ -1,18 +1,23 @@
 """
 =============================================================
-  MTL LEGAL AGENT PREMIUM
-  Công ty Luật TNHH Minh Tú
+  MTL LEGAL AGENT PREMIUM — Công ty Luật TNHH Minh Tú
 =============================================================
-Cài đặt (chạy 1 lần):
-  pip install streamlit anthropic python-docx PyPDF2 pillow
+Cài đặt:
+  pip install streamlit anthropic python-docx PyPDF2 pillow pymupdf
+  pip install google-auth google-auth-oauthlib google-api-python-client
 
-Chạy app:
-  streamlit run app.py
+Chạy:  streamlit run app.py
 =============================================================
-PHIÊN BẢN CẬP NHẬT:
-  - Fix lỗi AI soạn email không hiển thị nội dung (widget state collision)
-  - Cập nhật model name hợp lệ: claude-sonnet-4-6
-  - Parse response AI an toàn (multi-block)
+PHIÊN BẢN TÍCH HỢP HOÀN CHỈNH:
+  ✓ Fix email AI hiển thị nội dung (widget state collision)
+  ✓ Model claude-sonnet-4-6, parse response an toàn
+  ✓ Đọc PDF scan qua vision (pymupdf)
+  ✓ Tab Hỏi đáp đọc được ảnh scan
+  ✓ Fix encoding tiếng Việt khi gửi Gmail (EmailMessage)
+  ✓ Email AI: bỏ markdown, văn phong trang trọng
+  ✓ Lưu trữ dữ liệu trên Drive công ty qua Service Account
+  ✓ Agent nhớ vụ việc đã phân tích qua các phiên
+  ✓ Panel kiểm tra cấu hình Drive cho admin
 =============================================================
 """
 
@@ -26,7 +31,6 @@ import re
 import json
 from datetime import datetime, timedelta
 
-# OAuth + Gmail API
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -38,80 +42,244 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 import PyPDF2
 from calendar import monthrange
 
-# =============================================================
-#  API KEY — cấu hình trong Railway Variables
-#  Tên biến trong Railway: ANTHROPIC_API_KEY
-# =============================================================
-API_KEY_FALLBACK = ""
-# =============================================================
+# ════════════════════════════════════════════════════════════════════
+#  MODULE LƯU TRỮ — SERVICE ACCOUNT (BẢO MẬT TỐI ĐA)
+#  Cấu hình Railway Variables:
+#    GOOGLE_SERVICE_ACCOUNT_JSON, MTL_FOLDER_LS_HOANG, MTL_FOLDER_LS_THANG,
+#    MTL_FOLDER_LS_LAN, MTL_FOLDER_LS_PHUONG, MTL_FOLDER_LS_NGA,
+#    MTL_FOLDER_LS_DONG, MTL_FOLDER_ADMIN
+# ════════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────
-#  THÔNG TIN CÔNG TY
-# ─────────────────────────────────────────────
+from google.oauth2 import service_account
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+
+HIDDEN_DATA_FOLDER = ".MTL_Agent_Data"
+
+FOLDER_ID_MAP = {
+    "ls.hoang":  os.environ.get("MTL_FOLDER_LS_HOANG",  "").strip(),
+    "ls.thang":  os.environ.get("MTL_FOLDER_LS_THANG",  "").strip(),
+    "ls.lan":    os.environ.get("MTL_FOLDER_LS_LAN",    "").strip(),
+    "ls.phuong": os.environ.get("MTL_FOLDER_LS_PHUONG", "").strip(),
+    "ls.nga":    os.environ.get("MTL_FOLDER_LS_NGA",    "").strip(),
+    "ls.dong":   os.environ.get("MTL_FOLDER_LS_DONG",   "").strip(),
+    "admin":     os.environ.get("MTL_FOLDER_ADMIN",     "").strip(),
+}
+
+_SA_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+@st.cache_resource(show_spinner=False)
+def _service_account_creds():
+    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw:
+        print("[Drive SA] CHƯA cấu hình GOOGLE_SERVICE_ACCOUNT_JSON")
+        return None
+    try:
+        return service_account.Credentials.from_service_account_info(
+            json.loads(raw), scopes=_SA_SCOPES,
+        )
+    except Exception as e:
+        print(f"[Drive SA] Lỗi parse JSON: {e}")
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def _drive_sa_service():
+    creds = _service_account_creds()
+    if not creds:
+        return None
+    try:
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception as e:
+        print(f"[Drive SA] Lỗi build service: {e}")
+        return None
+
+
+def _get_or_create_hidden_subfolder(svc, parent_folder_id):
+    cache_key = f"_hidden_folder_{parent_folder_id}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    try:
+        q = (f"name='{HIDDEN_DATA_FOLDER}' and "
+             f"mimeType='application/vnd.google-apps.folder' and "
+             f"'{parent_folder_id}' in parents and trashed=false")
+        results = svc.files().list(
+            q=q, fields="files(id,name)",
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        folders = results.get("files", [])
+        if folders:
+            fid = folders[0]["id"]
+        else:
+            metadata = {
+                "name": HIDDEN_DATA_FOLDER,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_folder_id],
+            }
+            folder = svc.files().create(
+                body=metadata, fields="id", supportsAllDrives=True,
+            ).execute()
+            fid = folder.get("id")
+        st.session_state[cache_key] = fid
+        return fid
+    except Exception as e:
+        print(f"[Drive SA] Lỗi tạo subfolder: {e}")
+        return None
+
+
+def _get_data_folder_for_user(user_id):
+    parent = FOLDER_ID_MAP.get(user_id, "")
+    if not parent:
+        return None
+    svc = _drive_sa_service()
+    if not svc:
+        return None
+    return _get_or_create_hidden_subfolder(svc, parent)
+
+
+def _find_file_id(svc, folder_id, ten_file):
+    try:
+        q = f"name='{ten_file}.json' and '{folder_id}' in parents and trashed=false"
+        results = svc.files().list(
+            q=q, fields="files(id,name)",
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        files = results.get("files", [])
+        return files[0]["id"] if files else None
+    except Exception:
+        return None
+
+
+def luu_du_lieu(user_id, ten_file, data):
+    svc = _drive_sa_service()
+    if not svc:
+        return False
+    folder_id = _get_data_folder_for_user(user_id)
+    if not folder_id:
+        return False
+    try:
+        json_str = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+        media = MediaIoBaseUpload(
+            io.BytesIO(json_str.encode("utf-8")),
+            mimetype="application/json", resumable=False,
+        )
+        existing_id = _find_file_id(svc, folder_id, ten_file)
+        if existing_id:
+            svc.files().update(
+                fileId=existing_id, media_body=media, supportsAllDrives=True,
+            ).execute()
+        else:
+            metadata = {"name": f"{ten_file}.json", "parents": [folder_id]}
+            svc.files().create(
+                body=metadata, media_body=media,
+                fields="id", supportsAllDrives=True,
+            ).execute()
+        return True
+    except Exception as e:
+        print(f"[Drive SA] Lỗi lưu {ten_file}: {e}")
+        return False
+
+
+def tai_du_lieu(user_id, ten_file, default=None):
+    svc = _drive_sa_service()
+    if not svc:
+        return default if default is not None else {}
+    folder_id = _get_data_folder_for_user(user_id)
+    if not folder_id:
+        return default if default is not None else {}
+    try:
+        file_id = _find_file_id(svc, folder_id, ten_file)
+        if not file_id:
+            return default if default is not None else {}
+        request = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
+        buf = io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        buf.seek(0)
+        return json.loads(buf.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[Drive SA] Lỗi đọc {ten_file}: {e}")
+        return default if default is not None else {}
+
+
+def tai_phien_cua_user(user_id):
+    if not _drive_sa_service():
+        return
+    if st.session_state.get(f"_loaded_{user_id}"):
+        return
+    st.session_state.lich_su_chat        = tai_du_lieu(user_id, "chat_history",   [])
+    st.session_state.mtl_tasks           = tai_du_lieu(user_id, "tasks",          [])
+    st.session_state.mtl_mandatory_done  = tai_du_lieu(user_id, "mandatory_done", {})
+    st.session_state.mtl_mandatory_notes = tai_du_lieu(user_id, "mandatory_notes",{})
+    st.session_state.ei_sent             = tai_du_lieu(user_id, "sent_emails",    [])
+    st.session_state.ho_so_da_phan_tich  = tai_du_lieu(user_id, "ho_so_history",  [])
+    st.session_state[f"_loaded_{user_id}"] = True
+
+
+def luu_phien_cua_user(user_id):
+    if not _drive_sa_service():
+        return
+    luu_du_lieu(user_id, "chat_history",    st.session_state.get("lich_su_chat", []))
+    luu_du_lieu(user_id, "tasks",           st.session_state.get("mtl_tasks", []))
+    luu_du_lieu(user_id, "mandatory_done",  st.session_state.get("mtl_mandatory_done", {}))
+    luu_du_lieu(user_id, "mandatory_notes", st.session_state.get("mtl_mandatory_notes", {}))
+    luu_du_lieu(user_id, "sent_emails",     st.session_state.get("ei_sent", []))
+    luu_du_lieu(user_id, "ho_so_history",   st.session_state.get("ho_so_da_phan_tich", []))
+
+
+def them_ho_so_vao_lich_su(user_id, ten_file, tom_tat):
+    lich_su = st.session_state.get("ho_so_da_phan_tich", [])
+    lich_su.insert(0, {
+        "ten_file": ten_file,
+        "ngay":     datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "tom_tat":  tom_tat[:3000],
+    })
+    st.session_state.ho_so_da_phan_tich = lich_su[:50]
+    luu_phien_cua_user(user_id)
+
+
+def kiem_tra_cau_hinh_drive():
+    creds = _service_account_creds()
+    has_sa = bool(creds)
+    sa_email = ""
+    if has_sa:
+        try:
+            sa_email = creds.service_account_email
+        except Exception:
+            pass
+    return {
+        "service_account_ok":    has_sa,
+        "service_account_email": sa_email,
+        "folders_ok":            {uid: bool(fid) for uid, fid in FOLDER_ID_MAP.items()},
+        "folders_thieu":         [uid for uid, fid in FOLDER_ID_MAP.items() if not fid],
+    }
+
+# ════════════════════════════════════════════════════════════════════
+
+API_KEY_FALLBACK = ""
+
 TEN_CONG_TY = "CÔNG TY LUẬT TNHH MINH TÚ"
 DIA_CHI_CT  = "Trụ sở: 4/9 Đường số 3 Cư Xá Đô Thành, Phường Bàn Cờ, TP. Hồ Chí Minh"
 DIA_CHI_DN  = "CN Đà Nẵng: 81 Xô Viết Nghệ Tĩnh, Phường Cẩm Lệ, TP. Đà Nẵng"
 SBT_CT      = "Hotline: 19000031 | Website: luatminhtu.vn | Email: info.luatminhtu@gmail.com"
 
-# ─────────────────────────────────────────────
-#  TÀI KHOẢN LUẬT SƯ
-# ─────────────────────────────────────────────
 TAI_KHOAN = {
-    "ls.hoang": {
-        "mat_khau": "Hoang@2026",
-        "ho_ten":   "Luật sư Nguyễn Minh Hoàng",
-        "chuc_vu":  "Luật sư thành viên",
-        "vai_tro":  "luat_su",
-    },
-    "ls.thang": {
-        "mat_khau": "Thang@2026",
-        "ho_ten":   "Luật sư Trịnh Chiến Thắng",
-        "chuc_vu":  "Luật sư thành viên",
-        "vai_tro":  "luat_su",
-    },
-    "ls.lan": {
-        "mat_khau": "Lan@2026",
-        "ho_ten":   "Luật sư Nguyễn Thị Thanh Lan",
-        "chuc_vu":  "Luật sư thành viên",
-        "vai_tro":  "luat_su",
-    },
-    "ls.phuong": {
-        "mat_khau": "Phuong@2026",
-        "ho_ten":   "Luật sư Lê Thuý Phượng",
-        "chuc_vu":  "Luật sư thành viên",
-        "vai_tro":  "luat_su",
-    },
-    "ls.nga": {
-        "mat_khau": "Nga@2026",
-        "ho_ten":   "Luật sư Phạm Thị Nga",
-        "chuc_vu":  "Luật sư thành viên",
-        "vai_tro":  "luat_su",
-    },
-    "ls.dong": {
-        "mat_khau": "Dong@2026",
-        "ho_ten":   "Luật sư Lê Viễn Đông",
-        "chuc_vu":  "Luật sư thành viên",
-        "vai_tro":  "luat_su",
-    },
-    "admin": {
-        "mat_khau": "Admin@MTL2026",
-        "ho_ten":   "Quản trị viên",
-        "chuc_vu":  "Quản lý hệ thống",
-        "vai_tro":  "quan_tri",
-    },
+    "ls.hoang":  {"mat_khau": "Hoang@2026",  "ho_ten": "Luật sư Nguyễn Minh Hoàng", "chuc_vu": "Luật sư thành viên", "vai_tro": "luat_su"},
+    "ls.thang":  {"mat_khau": "Thang@2026",  "ho_ten": "Luật sư Trịnh Chiến Thắng", "chuc_vu": "Luật sư thành viên", "vai_tro": "luat_su"},
+    "ls.lan":    {"mat_khau": "Lan@2026",    "ho_ten": "Luật sư Nguyễn Thị Thanh Lan", "chuc_vu": "Luật sư thành viên", "vai_tro": "luat_su"},
+    "ls.phuong": {"mat_khau": "Phuong@2026", "ho_ten": "Luật sư Lê Thuý Phượng", "chuc_vu": "Luật sư thành viên", "vai_tro": "luat_su"},
+    "ls.nga":    {"mat_khau": "Nga@2026",    "ho_ten": "Luật sư Phạm Thị Nga", "chuc_vu": "Luật sư thành viên", "vai_tro": "luat_su"},
+    "ls.dong":   {"mat_khau": "Dong@2026",   "ho_ten": "Luật sư Lê Viễn Đông", "chuc_vu": "Luật sư thành viên", "vai_tro": "luat_su"},
+    "admin":     {"mat_khau": "Admin@MTL2026", "ho_ten": "Quản trị viên", "chuc_vu": "Quản lý hệ thống", "vai_tro": "quan_tri"},
 }
 
-# ─────────────────────────────────────────────
-#  MÀU THƯƠNG HIỆU MTL
-# ─────────────────────────────────────────────
 MTL_NAVY  = "#1E4D82"
 MTL_GOLD  = "#A8874A"
 MTL_NAVY2 = "#163960"
 MTL_GOLD2 = "#C9A96E"
 
-# ─────────────────────────────────────────────
-#  CẤU HÌNH TRANG
-# ─────────────────────────────────────────────
 st.set_page_config(
     page_title="MTL Legal Agent Premium",
     page_icon="⚖️",
@@ -122,44 +290,22 @@ st.set_page_config(
 st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Be+Vietnam+Pro:wght@300;400;500;600;700&display=swap');
-
 #MainMenu, footer {{ visibility: hidden; }}
-
-/* ── Font thương hiệu — KHÔNG ghi đè icon Streamlit ── */
-html, body, [class*="css"] {{
+html, body, [class*="css"] {{ font-family: 'Be Vietnam Pro', sans-serif !important; }}
+.stMarkdown, .stMarkdown p, .stMarkdown div, .stTextInput label, .stTextArea label,
+.stSelectbox label, .stFileUploader label, .stButton > button, .stTabs [data-baseweb="tab"],
+[data-testid="stMetricLabel"], [data-testid="stMetricValue"], [data-testid="stSidebarContent"] {{
     font-family: 'Be Vietnam Pro', sans-serif !important;
 }}
-.stMarkdown, .stMarkdown p, .stMarkdown div,
-.stTextInput label, .stTextArea label, .stSelectbox label,
-.stFileUploader label, .stButton > button,
-.stTabs [data-baseweb="tab"],
-[data-testid="stMetricLabel"], [data-testid="stMetricValue"],
-[data-testid="stSidebarContent"] {{
-    font-family: 'Be Vietnam Pro', sans-serif !important;
-}}
-h1, h2, h3, h4, h5,
-.mtl-header h1, .mtl-title-block h1,
-.login-title {{
+h1, h2, h3, h4, h5, .mtl-header h1, .mtl-title-block h1, .login-title {{
     font-family: 'Playfair Display', serif !important;
 }}
-
-/* ── Xoá khoảng trắng — nội dung sát viền ── */
 .stApp > header {{ display: none !important; }}
-[data-testid="stAppViewContainer"] > .main {{
-    padding: 0 !important;
+[data-testid="stAppViewContainer"] > .main {{ padding: 0 !important; }}
+[data-testid="stMainBlockContainer"], .block-container {{
+    padding: 0.75rem 1rem 1rem 1rem !important; max-width: 100% !important;
 }}
-[data-testid="stMainBlockContainer"],
-.block-container {{
-    padding: 0.75rem 1rem 1rem 1rem !important;
-    max-width: 100% !important;
-}}
-
-/* Ẩn nút » khi sidebar bị thu — tránh hiện icon lạ */
-[data-testid="collapsedControl"] {{
-    display: none !important;
-}}
-
-/* Sidebar — chỉ màu sắc, không đụng layout */
+[data-testid="collapsedControl"] {{ display: none !important; }}
 section[data-testid="stSidebar"] {{
     background: linear-gradient(180deg, {MTL_NAVY2} 0%, {MTL_NAVY} 60%, #122d50 100%);
     border-right: 2px solid {MTL_GOLD};
@@ -168,110 +314,71 @@ section[data-testid="stSidebar"] * {{ color: #e8eef5 !important; }}
 section[data-testid="stSidebar"] input {{
     background: rgba(255,255,255,0.08) !important;
     border: 1px solid {MTL_GOLD} !important;
-    color: white !important;
-    border-radius: 6px !important;
+    color: white !important; border-radius: 6px !important;
 }}
 section[data-testid="stSidebar"] hr {{ border-color: {MTL_GOLD}44 !important; }}
 section[data-testid="stSidebar"] .stButton > button {{
-    background: transparent !important;
-    border: 1px solid {MTL_GOLD} !important;
-    color: {MTL_GOLD} !important;
-    border-radius: 6px !important;
-    font-weight: 600 !important;
+    background: transparent !important; border: 1px solid {MTL_GOLD} !important;
+    color: {MTL_GOLD} !important; border-radius: 6px !important; font-weight: 600 !important;
 }}
 section[data-testid="stSidebar"] .stButton > button:hover {{
-    background: {MTL_GOLD} !important;
-    color: white !important;
+    background: {MTL_GOLD} !important; color: white !important;
 }}
 section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzone"] {{
     background: rgba(255,255,255,0.05) !important;
-    border: 2px dashed {MTL_GOLD}99 !important;
-    border-radius: 10px !important;
+    border: 2px dashed {MTL_GOLD}99 !important; border-radius: 10px !important;
 }}
 section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzone"] * {{
     color: {MTL_GOLD2} !important;
 }}
 section[data-testid="stSidebar"] .stFileUploader button {{
-    background: {MTL_GOLD} !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 6px !important;
-    font-weight: 600 !important;
+    background: {MTL_GOLD} !important; color: white !important;
+    border: none !important; border-radius: 6px !important; font-weight: 600 !important;
 }}
 .mtl-header {{
     background: linear-gradient(135deg, {MTL_NAVY2} 0%, {MTL_NAVY} 70%, #1a5592 100%);
-    border-bottom: 3px solid {MTL_GOLD};
-    border-radius: 12px;
-    margin-bottom: 16px;
-    overflow: hidden;
-    box-shadow: 0 4px 20px rgba(30,77,130,0.25);
+    border-bottom: 3px solid {MTL_GOLD}; border-radius: 12px;
+    margin-bottom: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(30,77,130,0.25);
 }}
-.mtl-header-inner {{
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    padding: 22px 32px;
-    min-height: 90px;
-}}
+.mtl-header-inner {{ display: flex; align-items: center; gap: 20px; padding: 22px 32px; min-height: 90px; }}
 .mtl-box {{
-    width: 40px; height: 40px; border-radius: 6px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.2rem; font-weight: 700; color: white; font-family: Georgia, serif;
+    width: 40px; height: 40px; border-radius: 6px; display: flex;
+    align-items: center; justify-content: center; font-size: 1.2rem;
+    font-weight: 700; color: white; font-family: Georgia, serif;
 }}
 .mtl-box-navy {{ background: {MTL_NAVY2}; border: 1.5px solid rgba(255,255,255,0.3); }}
 .mtl-box-gold  {{ background: {MTL_GOLD};  border: 1.5px solid rgba(255,255,255,0.3); }}
-.mtl-divider {{
-    width: 2px; height: 52px;
-    background: linear-gradient(to bottom, transparent, {MTL_GOLD}, transparent);
-    margin: 0 12px;
+.mtl-divider {{ width: 2px; height: 52px;
+    background: linear-gradient(to bottom, transparent, {MTL_GOLD}, transparent); margin: 0 12px;
 }}
 .mtl-title-block h1 {{ margin: 0; color: white; font-size: 1.25rem; font-weight: 700; }}
 .mtl-title-block .mtl-sub {{ margin: 3px 0 0; color: {MTL_GOLD2}; font-size: 0.82rem; }}
 .mtl-user-badge {{
-    margin-left: auto;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid {MTL_GOLD}66;
-    border-radius: 8px; padding: 8px 16px; text-align: right;
+    margin-left: auto; background: rgba(255,255,255,0.08);
+    border: 1px solid {MTL_GOLD}66; border-radius: 8px; padding: 8px 16px; text-align: right;
 }}
 .mtl-user-badge .name {{ color: white; font-weight: 600; font-size: 0.9rem; }}
 .mtl-user-badge .role {{ color: {MTL_GOLD2}; font-size: 0.78rem; }}
 .mtl-user-badge .date {{ color: rgba(255,255,255,0.5); font-size: 0.72rem; margin-top: 2px; }}
 .login-card {{
     background: white; border-radius: 16px; padding: 32px 36px 28px;
-    box-shadow: 0 8px 40px rgba(30,77,130,0.15);
-    border-top: 4px solid {MTL_GOLD}; max-width: 420px; margin: 0 auto;
+    box-shadow: 0 8px 40px rgba(30,77,130,0.15); border-top: 4px solid {MTL_GOLD};
+    max-width: 420px; margin: 0 auto;
 }}
-.login-title {{ text-align: center; color: {MTL_NAVY}; font-size: 1.4rem; font-weight: 700; margin: 8px 0 4px;
-    font-family: 'Playfair Display', serif !important; }}
-.login-sub {{ text-align: center; color: {MTL_GOLD}; font-size: 0.82rem; letter-spacing: 1px; margin: 0 0 20px; text-transform: uppercase; font-weight: 600; }}
+.login-title {{ text-align: center; color: {MTL_NAVY}; font-size: 1.4rem; font-weight: 700;
+    margin: 8px 0 4px; font-family: 'Playfair Display', serif !important; }}
+.login-sub {{ text-align: center; color: {MTL_GOLD}; font-size: 0.82rem; letter-spacing: 1px;
+    margin: 0 0 20px; text-transform: uppercase; font-weight: 600; }}
 .result-box {{
     background: linear-gradient(135deg, #f0f5ff 0%, #fafbff 100%);
-    border-left: 4px solid {MTL_NAVY};
-    border-top: 1px solid #e0e8f5; border-right: 1px solid #e0e8f5; border-bottom: 1px solid #e0e8f5;
+    border-left: 4px solid {MTL_NAVY}; border-top: 1px solid #e0e8f5;
+    border-right: 1px solid #e0e8f5; border-bottom: 1px solid #e0e8f5;
     padding: 20px 24px; border-radius: 0 10px 10px 0; margin-top: 16px; line-height: 1.75;
 }}
-/* ══════════════════════════════════════
-   MOBILE RESPONSIVE — max-width: 768px
-   ══════════════════════════════════════ */
 @media (max-width: 768px) {{
-
-  /* Padding tổng thể nhỏ lại */
-  [data-testid="stMainBlockContainer"],
-  .block-container {{
-    padding: 0.4rem 0.5rem 1rem 0.5rem !important;
-  }}
-
-  /* Header co lại trên mobile */
-  .mtl-header-inner {{
-    padding: 12px 14px !important;
-    min-height: 60px !important;
-    gap: 10px !important;
-    flex-wrap: wrap;
-  }}
-  .mtl-box {{
-    width: 28px !important; height: 28px !important;
-    font-size: 0.85rem !important; border-radius: 5px !important;
-  }}
+  [data-testid="stMainBlockContainer"], .block-container {{ padding: 0.4rem 0.5rem 1rem 0.5rem !important; }}
+  .mtl-header-inner {{ padding: 12px 14px !important; min-height: 60px !important; gap: 10px !important; flex-wrap: wrap; }}
+  .mtl-box {{ width: 28px !important; height: 28px !important; font-size: 0.85rem !important; border-radius: 5px !important; }}
   .mtl-divider {{ height: 34px !important; margin: 0 6px !important; }}
   .mtl-title-block h1 {{ font-size: 0.9rem !important; }}
   .mtl-title-block .mtl-sub {{ font-size: 0.65rem !important; display: none; }}
@@ -279,92 +386,26 @@ section[data-testid="stSidebar"] .stFileUploader button {{
   .mtl-user-badge .name {{ font-size: 0.75rem !important; }}
   .mtl-user-badge .role {{ font-size: 0.65rem !important; }}
   .mtl-user-badge .date {{ font-size: 0.6rem !important; }}
-
-  /* Values bar ẩn trên mobile nhỏ — tiết kiệm không gian */
-  [data-testid="stMarkdownContainer"] > div[style*="background:linear-gradient(90deg"] {{
-    display: none !important;
-  }}
-
-  /* Tabs — cuộn ngang thay vì wrap */
-  .stTabs [data-baseweb="tab-list"] {{
-    overflow-x: auto !important;
-    flex-wrap: nowrap !important;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }}
+  .stTabs [data-baseweb="tab-list"] {{ overflow-x: auto !important; flex-wrap: nowrap !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }}
   .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
-  .stTabs [data-baseweb="tab"] {{
-    padding: 6px 12px !important;
-    font-size: 0.78rem !important;
-    white-space: nowrap !important;
-    flex-shrink: 0 !important;
-  }}
-
-  /* Columns tự động stack dọc */
-  [data-testid="stHorizontalBlock"] {{
-    flex-direction: column !important;
-  }}
-  [data-testid="stHorizontalBlock"] > [data-testid="stVerticalBlock"] {{
-    width: 100% !important;
-    min-width: 100% !important;
-  }}
-
-  /* Sidebar — nhỏ hơn trên mobile */
-  section[data-testid="stSidebar"] > div {{
-    padding: 0.5rem !important;
-  }}
-  section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
-    padding: 8px !important;
-  }}
-
-  /* Nút fullwidth trên mobile */
-  .stButton > button {{
-    font-size: 0.82rem !important;
-    padding: 8px 12px !important;
-  }}
-
-  /* Text area nhỏ hơn */
-  .stTextArea textarea {{
-    min-height: 80px !important;
-    font-size: 0.85rem !important;
-  }}
-
-  /* Metrics — 2 cột thay vì 4 */
-  [data-testid="stMetric"] {{
-    min-width: 45% !important;
-  }}
-
-  /* Login card */
-  .login-card {{
-    padding: 20px 18px 16px !important;
-    border-radius: 12px !important;
-    margin: 0 8px !important;
-  }}
+  .stTabs [data-baseweb="tab"] {{ padding: 6px 12px !important; font-size: 0.78rem !important; white-space: nowrap !important; flex-shrink: 0 !important; }}
+  [data-testid="stHorizontalBlock"] {{ flex-direction: column !important; }}
+  [data-testid="stHorizontalBlock"] > [data-testid="stVerticalBlock"] {{ width: 100% !important; min-width: 100% !important; }}
+  section[data-testid="stSidebar"] > div {{ padding: 0.5rem !important; }}
+  section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ padding: 8px !important; }}
+  .stButton > button {{ font-size: 0.82rem !important; padding: 8px 12px !important; }}
+  .stTextArea textarea {{ min-height: 80px !important; font-size: 0.85rem !important; }}
+  [data-testid="stMetric"] {{ min-width: 45% !important; }}
+  .login-card {{ padding: 20px 18px 16px !important; border-radius: 12px !important; margin: 0 8px !important; }}
   .login-title {{ font-size: 1.1rem !important; }}
-
-  /* File uploader */
-  [data-testid="stFileUploader"] {{
-    font-size: 0.8rem !important;
-  }}
-
-  /* Result box */
-  .result-box {{
-    padding: 12px 14px !important;
-    font-size: 0.88rem !important;
-  }}
-
-  /* Header margin nhỏ lại */
+  [data-testid="stFileUploader"] {{ font-size: 0.8rem !important; }}
+  .result-box {{ padding: 12px 14px !important; font-size: 0.88rem !important; }}
   .mtl-header {{ margin-bottom: 8px !important; border-radius: 8px !important; }}
 }}
-
-/* Màn hình rất nhỏ (< 480px) */
 @media (max-width: 480px) {{
   .mtl-user-badge {{ display: none !important; }}
   .mtl-header-inner {{ padding: 10px 12px !important; }}
-  .stTabs [data-baseweb="tab"] {{
-    padding: 5px 9px !important;
-    font-size: 0.72rem !important;
-  }}
+  .stTabs [data-baseweb="tab"] {{ padding: 5px 9px !important; font-size: 0.72rem !important; }}
 }}
 .stTabs [data-baseweb="tab"] {{ border-radius: 8px 8px 0 0 !important; font-weight: 600 !important; padding: 8px 18px !important; }}
 .stTabs [aria-selected="true"] {{ background: {MTL_NAVY} !important; color: white !important; border-bottom: 2px solid {MTL_GOLD} !important; }}
@@ -382,24 +423,16 @@ section[data-testid="stSidebar"] .stFileUploader button {{
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-#  XÁC ĐỊNH API KEY
-# ─────────────────────────────────────────────
 def lay_api_key():
-    # Đọc thẳng từ env var Railway
     key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if key:
         return key
-    # Fallback: key dự phòng điền tay
     if API_KEY_FALLBACK and len(API_KEY_FALLBACK) > 20:
         return API_KEY_FALLBACK
     return ""
 
 API_KEY = lay_api_key()
 
-# ─────────────────────────────────────────────
-#  ĐĂNG NHẬP
-# ─────────────────────────────────────────────
 if "dang_nhap" not in st.session_state:
     st.session_state.dang_nhap = False
     st.session_state.nguoi_dung = None
@@ -431,56 +464,36 @@ if not st.session_state.dang_nhap:
   <p class="login-sub">⚖ Legal Agent Premium</p>
 </div>
 """, unsafe_allow_html=True)
-
         with st.form("form_dn"):
             ten_tk   = st.text_input("Tên đăng nhập", placeholder="Ví dụ: ls.hoang")
             mat_khau = st.text_input("Mật khẩu", type="password", placeholder="••••••••")
             nut      = st.form_submit_button("🔐  Đăng nhập", use_container_width=True)
-
         if nut:
             if dang_nhap(ten_tk.strip(), mat_khau):
                 st.success("✅ Đăng nhập thành công!")
                 st.rerun()
             else:
                 st.error("❌ Sai tên đăng nhập hoặc mật khẩu.")
-
         st.markdown("<p style='text-align:center;color:#bbb;font-size:0.75rem;margin-top:12px;'>© 2026 Công ty Luật TNHH Minh Tú</p>", unsafe_allow_html=True)
-
-    # 3 giá trị cốt lõi — full width bên dưới
     st.markdown(f"""
 <div style="max-width:700px;margin:24px auto 0;">
   <p style="text-align:center;font-size:0.72rem;color:{MTL_GOLD};font-weight:700;
   letter-spacing:2px;text-transform:uppercase;margin-bottom:14px;">✦ Giá trị cốt lõi ✦</p>
   <div style="display:flex;gap:12px;">
-    <div style="flex:1;text-align:center;padding:16px 10px;
-    background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
-    border-radius:12px;border:1px solid {MTL_GOLD}55;
-    box-shadow:0 4px 15px rgba(30,77,130,0.2);">
+    <div style="flex:1;text-align:center;padding:16px 10px;background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});border-radius:12px;border:1px solid {MTL_GOLD}55;box-shadow:0 4px 15px rgba(30,77,130,0.2);">
       <div style="font-size:1.6rem;margin-bottom:6px;">🤝</div>
-      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Cam kết</div>
-      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">
-      Tận tâm phục vụ đến cùng</div>
+      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Cam kết</div>
+      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">Tận tâm phục vụ đến cùng</div>
     </div>
-    <div style="flex:1;text-align:center;padding:16px 10px;
-    background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
-    border-radius:12px;border:1px solid {MTL_GOLD}55;
-    box-shadow:0 4px 15px rgba(30,77,130,0.2);">
+    <div style="flex:1;text-align:center;padding:16px 10px;background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});border-radius:12px;border:1px solid {MTL_GOLD}55;box-shadow:0 4px 15px rgba(30,77,130,0.2);">
       <div style="font-size:1.6rem;margin-bottom:6px;">⚖️</div>
-      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Chính trực</div>
-      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">
-      Minh bạch & đạo đức nghề nghiệp</div>
+      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Chính trực</div>
+      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">Minh bạch & đạo đức nghề nghiệp</div>
     </div>
-    <div style="flex:1;text-align:center;padding:16px 10px;
-    background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});
-    border-radius:12px;border:1px solid {MTL_GOLD}55;
-    box-shadow:0 4px 15px rgba(30,77,130,0.2);">
+    <div style="flex:1;text-align:center;padding:16px 10px;background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});border-radius:12px;border:1px solid {MTL_GOLD}55;box-shadow:0 4px 15px rgba(30,77,130,0.2);">
       <div style="font-size:1.6rem;margin-bottom:6px;">📚</div>
-      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Học hỏi</div>
-      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">
-      Không ngừng trau dồi kiến thức</div>
+      <div style="font-size:0.78rem;font-weight:800;color:{MTL_GOLD};letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">Học hỏi</div>
+      <div style="font-size:0.68rem;color:rgba(255,255,255,0.6);line-height:1.5;">Không ngừng trau dồi kiến thức</div>
     </div>
   </div>
 </div>
@@ -491,7 +504,6 @@ if not st.session_state.dang_nhap:
 #  HÀM ĐỌC FILE
 # ─────────────────────────────────────────────
 def doc_pdf(file_bytes):
-    """Đọc PDF text thường bằng PyPDF2 (giữ nguyên để tương thích cũ)."""
     try:
         reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
         noi_dung = []
@@ -502,81 +514,52 @@ def doc_pdf(file_bytes):
         return "\n\n".join(noi_dung) if noi_dung else "⚠️ Không đọc được nội dung PDF."
     except Exception as e:
         return f"Lỗi đọc PDF: {e}"
- 
- 
+
+
 def doc_pdf_thong_minh(file_bytes, ten_file, max_trang_anh=20):
     """Đọc PDF thông minh: xử lý cả PDF text VÀ PDF scan (ảnh)."""
-    import fitz  # PyMuPDF
- 
+    import fitz
     results = []
- 
     try:
         pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
         text_parts = []
         pages_without_text = []
- 
-        # Bước 1: Phân loại trang text vs trang ảnh
         for i, page in enumerate(pdf_doc):
             txt = page.get_text().strip()
             if txt and len(txt) > 40:
                 text_parts.append(f"[Trang {i+1}]\n{txt}")
             else:
                 pages_without_text.append(i)
- 
-        # Trường hợp A: PDF có text đầy đủ
         if text_parts and not pages_without_text:
-            results.append({
-                "ten":     ten_file,
-                "loai":    "pdf",
-                "du_lieu": "\n\n".join(text_parts),
-            })
+            results.append({"ten": ten_file, "loai": "pdf", "du_lieu": "\n\n".join(text_parts)})
             pdf_doc.close()
             return results
- 
-        # Trường hợp B & C: PDF scan hoặc hỗn hợp
         if text_parts:
-            results.append({
-                "ten":     f"{ten_file} — phần có sẵn text",
-                "loai":    "pdf",
-                "du_lieu": "\n\n".join(text_parts),
-            })
- 
-        # Render trang scan thành PNG
-        so_trang_render = min(len(pages_without_text), max_trang_anh)
-        for k in range(so_trang_render):
+            results.append({"ten": f"{ten_file} — phần có sẵn text", "loai": "pdf", "du_lieu": "\n\n".join(text_parts)})
+        for k in range(min(len(pages_without_text), max_trang_anh)):
             page_idx = pages_without_text[k]
             page = pdf_doc[page_idx]
             mat = fitz.Matrix(1.5, 1.5)
             pix = page.get_pixmap(matrix=mat)
-            img_bytes = pix.tobytes("png")
             results.append({
                 "ten":        f"{ten_file} — Trang {page_idx + 1} (ảnh scan)",
                 "loai":       "anh",
-                "du_lieu":    base64.standard_b64encode(img_bytes).decode(),
+                "du_lieu":    base64.standard_b64encode(pix.tobytes("png")).decode(),
                 "media_type": "image/png",
             })
- 
-        # Cảnh báo nếu cắt bớt
         if len(pages_without_text) > max_trang_anh:
             results.append({
                 "ten":     f"{ten_file} — Cảnh báo",
                 "loai":    "pdf",
                 "du_lieu": (f"⚠️ PDF có {len(pages_without_text)} trang ảnh scan, "
-                            f"nhưng chỉ {max_trang_anh} trang đầu được đưa vào AI. "
-                            f"Vui lòng tách file PDF nếu cần phân tích đủ."),
+                            f"nhưng chỉ {max_trang_anh} trang đầu được đưa vào AI."),
             })
- 
         pdf_doc.close()
         return results
- 
     except Exception as e:
-        # Fallback nếu PyMuPDF lỗi
         text = doc_pdf(file_bytes)
-        return [{
-            "ten":     ten_file,
-            "loai":    "pdf",
-            "du_lieu": text + f"\n\n[⚠️ Không đọc được ảnh scan: {e}]",
-        }]
+        return [{"ten": ten_file, "loai": "pdf", "du_lieu": text + f"\n\n[⚠️ Không đọc được ảnh scan: {e}]"}]
+
 
 def doc_docx(file_bytes):
     try:
@@ -586,21 +569,15 @@ def doc_docx(file_bytes):
         return f"Lỗi đọc DOCX: {e}"
 
 # ─────────────────────────────────────────────
-#  HÀM GỌI CLAUDE — ĐÃ FIX
-#  • Model name hợp lệ: claude-sonnet-4-6
-#  • Parse multi-block an toàn
-#  • Báo lỗi rõ ràng khi rỗng
+#  GỌI CLAUDE
 # ─────────────────────────────────────────────
 def goi_claude(messages, system_prompt):
     try:
         client = anthropic.Anthropic(api_key=API_KEY)
         response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system=system_prompt,
-            messages=messages,
+            model="claude-sonnet-4-6", max_tokens=4096,
+            system=system_prompt, messages=messages,
         )
-        # Parse an toàn — duyệt qua mọi text block
         text = "".join(b.text for b in response.content if hasattr(b, "text"))
         return text if text.strip() else "⚠️ AI trả về nội dung rỗng. Hãy thử lại."
     except anthropic.AuthenticationError:
@@ -609,6 +586,7 @@ def goi_claude(messages, system_prompt):
         return f"❌ Model không tồn tại: {e}"
     except Exception as e:
         return f"❌ Lỗi gọi AI: {e}"
+
 
 def phan_tich_ho_so(noi_dung_files, yeu_cau=""):
     system = f"""Bạn là chuyên gia pháp lý Việt Nam tại {TEN_CONG_TY}.
@@ -630,6 +608,7 @@ Phân tích hồ sơ bằng tiếng Việt, chuyên nghiệp, có cấu trúc r�
     messages.append({"role": "user", "content": cau_hoi})
     return goi_claude(messages, system)
 
+
 def soan_don_tu(loai_don, noi_dung, them=""):
     system = f"""Bạn là luật sư chuyên nghiệp tại {TEN_CONG_TY}.
 Soạn {loai_don} theo mẫu pháp lý Việt Nam: quốc hiệu, tiêu ngữ, tiêu đề, kính gửi,
@@ -640,68 +619,61 @@ nội dung (có căn cứ pháp lý), kính đề nghị, cam kết. Để [TR�
     ]
     return goi_claude(messages, system)
 
+
 def hoi_dap(lich_su, cau_hoi, files=None):
-    """
-    Hỏi đáp pháp lý — đã fix để đọc được CẢ file text VÀ file ảnh
-    (bao gồm các trang PDF scan đã được chuyển thành ảnh PNG).
-    """
+    """Hỏi đáp pháp lý — đọc text + ảnh, có ngữ cảnh từ vụ việc đã phân tích."""
+    ho_so_cu = st.session_state.get("ho_so_da_phan_tich", [])
+    ngu_canh_cu = ""
+    if ho_so_cu:
+        ngu_canh_cu = "\n\n[BỐI CẢNH — Các vụ việc đã phân tích trước đây]:\n"
+        for h in ho_so_cu[:5]:
+            ngu_canh_cu += (f"\n• [{h.get('ngay','')}] {h.get('ten_file','')}:\n"
+                            f"  {h.get('tom_tat','')[:500]}...\n")
+
     system = (
         f"Bạn là chuyên gia pháp lý tại {TEN_CONG_TY}. "
         f"Trả lời chuyên nghiệp, dẫn chiếu luật cụ thể khi cần. "
-        f"Nếu người dùng đã tải lên hồ sơ (bao gồm cả ảnh chụp, file scan, "
-        f"chữ viết tay), hãy đọc kỹ và tham chiếu nội dung đó khi trả lời."
+        f"Nếu người dùng đã tải lên hồ sơ (bao gồm ảnh chụp, file scan, "
+        f"chữ viết tay), hãy đọc kỹ và tham chiếu. "
+        f"Nếu câu hỏi liên quan đến vụ việc đã phân tích trước đây, "
+        f"hãy tham chiếu BỐI CẢNH bên dưới."
+        f"{ngu_canh_cu}"
     )
-    messages = list(lich_su)
 
+    messages = list(lich_su)
     if files:
-        # Tách 2 loại: text và ảnh
         text_items  = [f for f in files if f["loai"] != "anh"]
         image_items = [f for f in files if f["loai"] == "anh"]
-
-        # 1. Gom toàn bộ nội dung text thành 1 message (tiết kiệm token)
         if text_items:
             text_blob = "\n\n".join(
                 f"[Hồ sơ — {it['ten']}]:\n{it['du_lieu'][:2500]}"
                 for it in text_items
             )
             messages.insert(0, {"role": "user", "content": text_blob})
-
-        # 2. Gom tất cả ảnh vào 1 message với nhiều image block
-        #    Claude vision sẽ "đọc" được nội dung trong ảnh (kể cả OCR)
         if image_items:
             content_blocks = []
             for it in image_items:
                 content_blocks.append({
                     "type": "image",
-                    "source": {
-                        "type":       "base64",
-                        "media_type": it["media_type"],
-                        "data":       it["du_lieu"],
-                    },
+                    "source": {"type": "base64", "media_type": it["media_type"], "data": it["du_lieu"]},
                 })
-                content_blocks.append({
-                    "type": "text",
-                    "text": f"[Trang scan / ảnh hồ sơ — {it['ten']}]",
-                })
+                content_blocks.append({"type": "text", "text": f"[Trang scan / ảnh — {it['ten']}]"})
             messages.insert(0, {"role": "user", "content": content_blocks})
-
     messages.append({"role": "user", "content": cau_hoi})
     return goi_claude(messages, system)
 
 # ─────────────────────────────────────────────
 #  TẠO FILE WORD — ĐỊNH DẠNG MTL PREMIUM
 # ─────────────────────────────────────────────
-# Màu MTL chuẩn (lấy từ file mẫu công ty)
-C_NAVY      = RGBColor(0x1B, 0x4A, 0x7A)   # Navy chính
-C_NAVY_DARK = RGBColor(0x16, 0x3D, 0x66)   # Navy đậm
-C_GOLD      = RGBColor(0xB8, 0x97, 0x3A)   # Vàng đồng
-C_GOLD2     = RGBColor(0xCD, 0xB0, 0x60)   # Vàng sáng
+C_NAVY      = RGBColor(0x1B, 0x4A, 0x7A)
+C_NAVY_DARK = RGBColor(0x16, 0x3D, 0x66)
+C_GOLD      = RGBColor(0xB8, 0x97, 0x3A)
+C_GOLD2     = RGBColor(0xCD, 0xB0, 0x60)
 C_WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
-C_DARK      = RGBColor(0x1E, 0x29, 0x3B)   # Chữ chính
-C_MUTED     = RGBColor(0x64, 0x74, 0x8B)   # Chữ phụ
+C_DARK      = RGBColor(0x1E, 0x29, 0x3B)
+C_MUTED     = RGBColor(0x64, 0x74, 0x8B)
 
 def _set_cell_bg(cell, hex_color):
-    """Tô màu nền ô bảng"""
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
     tc = cell._tc
@@ -711,22 +683,6 @@ def _set_cell_bg(cell, hex_color):
     shd.set(qn('w:color'), 'auto')
     shd.set(qn('w:fill'), hex_color)
     tcPr.append(shd)
-
-def _set_cell_border(cell, top=None, bottom=None, left=None, right=None):
-    """Đặt viền ô"""
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-    tc = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    tcBorders = OxmlElement('w:tcBorders')
-    for side, val in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
-        if val:
-            el = OxmlElement(f'w:{side}')
-            el.set(qn('w:val'), val.get('val', 'single'))
-            el.set(qn('w:sz'), str(val.get('sz', 4)))
-            el.set(qn('w:color'), val.get('color', 'auto'))
-            tcBorders.append(el)
-    tcPr.append(tcBorders)
 
 def _run(para, text, size, bold=False, italic=False, color=None):
     run = para.add_run(text)
@@ -741,11 +697,7 @@ def _run(para, text, size, bold=False, italic=False, color=None):
 def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
-    from docx.shared import Inches
-
     doc = Document()
-
-    # ── Thiết lập trang A4 ──
     sec = doc.sections[0]
     sec.page_width    = Cm(21)
     sec.page_height   = Cm(29.7)
@@ -753,34 +705,27 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
     sec.bottom_margin = Cm(1.2)
     sec.left_margin   = Cm(1.2)
     sec.right_margin  = Cm(1.2)
-
-    # Xóa spacing mặc định
     style = doc.styles['Normal']
     style.font.name = "Times New Roman"
     style.paragraph_format.space_before = Pt(0)
     style.paragraph_format.space_after  = Pt(0)
 
-    # ── HEADER: Logo + Tiêu đề tài liệu ──
+    # Header
     tbl_header = doc.add_table(rows=1, cols=2)
     tbl_header.style = 'Table Grid'
     tbl_header.autofit = False
     tbl_header.columns[0].width = Cm(7)
     tbl_header.columns[1].width = Cm(11.8)
-
-    # Ô trái: logo
     cell_logo = tbl_header.cell(0, 0)
     _set_cell_bg(cell_logo, "1B4A7A")
     p_logo = cell_logo.paragraphs[0]
     p_logo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    # Nhúng logo nếu có file
     logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.jpg")
     if os.path.exists(logo_path):
         run_logo = p_logo.add_run()
         run_logo.add_picture(logo_path, width=Cm(5.5))
     else:
         _run(p_logo, "MINHTU LAW CO., LTD", 12, bold=True, color=C_WHITE)
-
-    # Ô phải: loại tài liệu
     cell_title = tbl_header.cell(0, 1)
     _set_cell_bg(cell_title, "FFFFFF")
     cell_title.width = Cm(11.8)
@@ -794,10 +739,9 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
     p_sub2 = cell_title.add_paragraph()
     p_sub2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     _run(p_sub2, f"Người soạn: {ten_ls}  ·  {chuc_vu}", 8, italic=True, color=C_MUTED)
-
     doc.add_paragraph()
 
-    # ── BANNER: RIÊNG TƯ & BẢO MẬT ──
+    # Banner bảo mật
     tbl_banner = doc.add_table(rows=1, cols=1)
     tbl_banner.style = 'Table Grid'
     tbl_banner.columns[0].width = Cm(18.6)
@@ -808,31 +752,22 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
     p_banner.paragraph_format.space_before = Pt(4)
     p_banner.paragraph_format.space_after  = Pt(4)
     _run(p_banner, "✦   THÔNG TIN BẢO MẬT  ·  CONFIDENTIAL   ✦", 7.5, bold=True, color=C_WHITE)
-
     doc.add_paragraph()
 
-    # ── NỘI DUNG CHÍNH ──
-    dong_list = [d for d in noi_dung.split("\n")]
-    i = 0
-    while i < len(dong_list):
-        dong = dong_list[i].strip()
+    # Nội dung
+    for dong in noi_dung.split("\n"):
+        dong = dong.strip()
         dong_sach = dong.replace("**", "").replace("###", "").replace("##", "").replace("# ", "").strip()
-
         if not dong_sach:
             p = doc.add_paragraph()
             p.paragraph_format.space_after = Pt(2)
-            i += 1
             continue
-
-        # Phát hiện tiêu đề section (toàn hoa, bắt đầu số, hoặc **text**)
         la_section = bool(
             (dong.isupper() and len(dong) > 3) or
             re.match(r"^\d+[\.\)]\s+[A-ZÁÀẢÃẠ]", dong) or
             (dong.startswith("**") and dong.endswith("**"))
         )
-
         if la_section:
-            # Section header: navy nền, chữ trắng
             tbl_sec = doc.add_table(rows=1, cols=1)
             tbl_sec.style = 'Table Grid'
             tbl_sec.columns[0].width = Cm(18.6)
@@ -845,39 +780,27 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
             _run(p_sec, dong_sach, 9.5, bold=True, color=C_WHITE)
             doc.add_paragraph().paragraph_format.space_after = Pt(2)
         else:
-            # Đoạn nội dung thường
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            p.paragraph_format.space_after      = Pt(4)
-            p.paragraph_format.left_indent      = Cm(0.5)
-            p.paragraph_format.first_line_indent = Cm(0)
-
-            # Sub-heading nhỏ (bắt đầu bằng •, -, số)
+            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.left_indent = Cm(0.5)
             la_bullet = bool(re.match(r"^[•\-\*]\s", dong_sach) or re.match(r"^\d+\.\s", dong_sach))
-
             if la_bullet:
                 p.paragraph_format.left_indent = Cm(1.0)
-                _run(p, dong_sach, 9.5, color=C_DARK)
-            else:
-                _run(p, dong_sach, 9.5, color=C_DARK)
+            _run(p, dong_sach, 9.5, color=C_DARK)
 
-        i += 1
-
-    # ── CHỮ KÝ ──
+    # Chữ ký
     doc.add_paragraph()
     tbl_sign = doc.add_table(rows=1, cols=2)
     tbl_sign.style = 'Table Grid'
     tbl_sign.columns[0].width = Cm(9.3)
     tbl_sign.columns[1].width = Cm(9.3)
-
     cell_l = tbl_sign.cell(0, 0)
     cell_r = tbl_sign.cell(0, 1)
     _set_cell_bg(cell_l, "F8FAFC")
     _set_cell_bg(cell_r, "F8FAFC")
-
     p_l = cell_l.paragraphs[0]
     p_l.paragraph_format.space_before = Pt(8)
-    p_l.paragraph_format.space_after  = Pt(8)
     p_l.paragraph_format.left_indent  = Cm(0.5)
     _run(p_l, "Kính trân trọng,\n", 9.5, color=C_MUTED)
     p_l2 = cell_l.add_paragraph()
@@ -890,7 +813,6 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
     p_l4.paragraph_format.left_indent = Cm(0.5)
     p_l4.paragraph_format.space_after = Pt(8)
     _run(p_l4, TEN_CONG_TY, 8.5, italic=True, color=C_GOLD)
-
     p_r = cell_r.paragraphs[0]
     p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     p_r.paragraph_format.space_before = Pt(8)
@@ -906,7 +828,7 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
     p_r3.paragraph_format.space_after  = Pt(8)
     _run(p_r3, "Tài liệu soạn bởi MTL Legal Agent Premium", 7.5, italic=True, color=C_MUTED)
 
-    # ── FOOTER: Gold bar ──
+    # Footer
     doc.add_paragraph()
     tbl_footer = doc.add_table(rows=1, cols=1)
     tbl_footer.style = 'Table Grid'
@@ -928,6 +850,7 @@ def tao_file_word(tieu_de, noi_dung, ten_ls, chuc_vu):
 #  GIAO DIỆN CHÍNH
 # ─────────────────────────────────────────────
 nd = st.session_state.nguoi_dung
+tai_phien_cua_user(nd["ten_tk"])  # Tải dữ liệu từ Drive ngay sau khi đăng nhập
 
 # ── SIDEBAR ──
 with st.sidebar:
@@ -950,30 +873,20 @@ with st.sidebar:
 
     if API_KEY:
         st.markdown("""
-<div style="background:rgba(100,180,100,0.15);border:1px solid #4a9a4a;border-radius:8px;
-padding:8px 12px;font-size:0.78rem;color:#90ee90;margin-bottom:12px;">
+<div style="background:rgba(100,180,100,0.15);border:1px solid #4a9a4a;border-radius:8px;padding:8px 12px;font-size:0.78rem;color:#90ee90;margin-bottom:12px;">
 ✅ API Key đã được cấu hình
 </div>""", unsafe_allow_html=True)
-        # Debug: hiện 8 ký tự đầu để xác nhận đúng key
         st.markdown(f"<div style='font-size:0.7rem;color:#888;margin-bottom:8px;'>Key: {API_KEY[:12]}...{API_KEY[-4:]}</div>", unsafe_allow_html=True)
     else:
         st.markdown("""
-<div style="background:rgba(220,80,80,0.15);border:1px solid #c04040;border-radius:8px;
-padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
+<div style="background:rgba(220,80,80,0.15);border:1px solid #c04040;border-radius:8px;padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
 ⚠️ Chưa có API Key!<br>Mở Railway → Variables → thêm ANTHROPIC_API_KEY
 </div>""", unsafe_allow_html=True)
 
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:4px 0 12px;'></div>", unsafe_allow_html=True)
-
-    # ── GMAIL OAuth — lên đầu để dễ thấy ──────────────
-    st.markdown(
-        f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;"
-        f"text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📧 Gmail</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📧 Gmail</div>", unsafe_allow_html=True)
 
     import requests as _rq
-
     _CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
     _CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
     _REDIRECT_URI  = "https://web-production-57eec.up.railway.app"
@@ -985,20 +898,13 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
     ]
     _cred_key = f"gcred_{nd['ten_tk']}"
 
-    # Cache đảm bảo mỗi code chỉ được exchange ĐÚNG 1 LẦN
-    # dù Streamlit chạy bao nhiêu thread/rerun đi nữa
     @st.cache_data(ttl=120, show_spinner=False)
     def _do_exchange(code, client_id, client_secret, redirect_uri):
         import requests as _r
         resp = _r.post(
             "https://oauth2.googleapis.com/token",
-            data={
-                "code":          code,
-                "client_id":     client_id,
-                "client_secret": client_secret,
-                "redirect_uri":  redirect_uri,
-                "grant_type":    "authorization_code",
-            },
+            data={"code": code, "client_id": client_id, "client_secret": client_secret,
+                  "redirect_uri": redirect_uri, "grant_type": "authorization_code"},
             timeout=15,
         )
         return resp.json()
@@ -1007,8 +913,7 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
         try:
             return _rq.get(
                 "https://www.googleapis.com/oauth2/v2/userinfo",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=8,
+                headers={"Authorization": f"Bearer {access_token}"}, timeout=8,
             ).json().get("email", "")
         except Exception:
             return ""
@@ -1027,88 +932,53 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
 
     if not _CLIENT_ID or not _CLIENT_SECRET:
         st.error("Thiếu GOOGLE_CLIENT_ID hoặc CLIENT_SECRET")
-
     elif _is_connected():
         _em = st.session_state.get(f"gemail_{nd['ten_tk']}", "Gmail")
         st.markdown(
-            f"<div style='background:rgba(100,180,100,0.15);border:1px solid #4a9a4a;"
-            f"border-radius:8px;padding:8px 10px;font-size:0.78rem;color:#90ee90;'>"
-            f"✅ {_em}</div>",
+            f"<div style='background:rgba(100,180,100,0.15);border:1px solid #4a9a4a;border-radius:8px;padding:8px 10px;font-size:0.78rem;color:#90ee90;'>✅ {_em}</div>",
             unsafe_allow_html=True,
         )
-        if st.button("↩ Ngắt kết nối", use_container_width=True,
-                     key=f"gdisconn_{nd['ten_tk']}"):
+        if st.button("↩ Ngắt kết nối", use_container_width=True, key=f"gdisconn_{nd['ten_tk']}"):
             st.session_state.pop(_cred_key, None)
             st.session_state.pop(f"gemail_{nd['ten_tk']}", None)
             st.rerun()
-
     else:
         _qp    = st.query_params
         _code  = _qp.get("code", "")
         _state = _qp.get("state", "")
-
         if _code and _state == nd["ten_tk"]:
-            # Xoá URL ngay để tránh các rerun sau thấy lại code
             st.query_params.clear()
-
-            # Gọi hàm đã được cache — dù gọi nhiều lần cũng chỉ POST 1 lần
             _tok = _do_exchange(_code, _CLIENT_ID, _CLIENT_SECRET, _REDIRECT_URI)
-
             if "access_token" in _tok:
                 _creds = Credentials(
-                    token=_tok["access_token"],
-                    refresh_token=_tok.get("refresh_token"),
+                    token=_tok["access_token"], refresh_token=_tok.get("refresh_token"),
                     token_uri="https://oauth2.googleapis.com/token",
-                    client_id=_CLIENT_ID,
-                    client_secret=_CLIENT_SECRET,
-                    scopes=_SCOPES,
+                    client_id=_CLIENT_ID, client_secret=_CLIENT_SECRET, scopes=_SCOPES,
                 )
                 st.session_state[_cred_key] = _creds
                 st.session_state[f"gemail_{nd['ten_tk']}"] = _get_email(_tok["access_token"])
                 st.rerun()
             else:
-                _err = _tok.get("error_description", _tok.get("error", "?"))
-                st.error(f"❌ Lỗi: {_err}")
-
+                st.error(f"❌ Lỗi: {_tok.get('error_description', _tok.get('error', '?'))}")
         else:
-            # Nút đăng nhập
             import urllib.parse as _up
-            _auth_url = (
-                "https://accounts.google.com/o/oauth2/v2/auth?"
-                + _up.urlencode({
-                    "client_id":     _CLIENT_ID,
-                    "redirect_uri":  _REDIRECT_URI,
-                    "response_type": "code",
-                    "scope":         " ".join(_SCOPES),
-                    "access_type":   "offline",
-                    "prompt":        "consent",
-                    "state":         nd["ten_tk"],
-                })
-            )
+            _auth_url = ("https://accounts.google.com/o/oauth2/v2/auth?" + _up.urlencode({
+                "client_id": _CLIENT_ID, "redirect_uri": _REDIRECT_URI,
+                "response_type": "code", "scope": " ".join(_SCOPES),
+                "access_type": "offline", "prompt": "consent", "state": nd["ten_tk"],
+            }))
             st.markdown(
-                f'<a href="{_auth_url}" target="_self">'
-                f'<button style="width:100%;background:#4285F4;color:white;'
-                f'border:none;border-radius:8px;padding:9px;font-size:0.85rem;'
-                f'font-weight:600;cursor:pointer;">'
-                f'🔐 Đăng nhập với Google</button></a>',
+                f'<a href="{_auth_url}" target="_self"><button style="width:100%;background:#4285F4;color:white;border:none;border-radius:8px;padding:9px;font-size:0.85rem;font-weight:600;cursor:pointer;">🔐 Đăng nhập với Google</button></a>',
                 unsafe_allow_html=True,
             )
-            st.caption("Dùng mật khẩu Gmail thông thường")
 
-    # ── TẢI HỒ SƠ — sau Gmail ──────────────────────────
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:12px 0 10px;'></div>", unsafe_allow_html=True)
     st.markdown(f"<div style='font-size:0.8rem;color:{MTL_GOLD2};font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;'>📂 Tải hồ sơ lên</div>", unsafe_allow_html=True)
-
-    files_upload = st.file_uploader(
-        "Chọn file",
+    files_upload = st.file_uploader("Chọn file",
         type=["pdf", "docx", "png", "jpg", "jpeg", "tiff", "bmp"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-    )
-
+        accept_multiple_files=True, label_visibility="collapsed")
     if "noi_dung_files" not in st.session_state:
         st.session_state.noi_dung_files = []
-
     if files_upload:
         st.session_state.noi_dung_files = []
         for f in files_upload:
@@ -1119,18 +989,12 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                     pdf_items = doc_pdf_thong_minh(data, f.name)
                 st.session_state.noi_dung_files.extend(pdf_items)
             elif ext == "docx":
-                st.session_state.noi_dung_files.append({
-                    "ten": f.name, "loai": "docx", "du_lieu": doc_docx(data),
-                })
+                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "docx", "du_lieu": doc_docx(data)})
             elif ext in ["png", "jpg", "jpeg", "tiff", "bmp"]:
-                media = {
-                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                    "png": "image/png", "tiff": "image/tiff", "bmp": "image/bmp",
-                }
+                media = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "tiff": "image/tiff", "bmp": "image/bmp"}
                 st.session_state.noi_dung_files.append({
-                    "ten":        f.name,
-                    "loai":       "anh",
-                    "du_lieu":    base64.standard_b64encode(data).decode(),
+                    "ten": f.name, "loai": "anh",
+                    "du_lieu": base64.standard_b64encode(data).decode(),
                     "media_type": media.get(ext, "image/jpeg"),
                 })
         if st.session_state.noi_dung_files:
@@ -1139,10 +1003,10 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
                 icon = "🖼️" if item["loai"] == "anh" else "📄"
                 st.markdown(f"<div style='font-size:0.8rem;padding:2px 0;'>{icon} {item['ten']}</div>", unsafe_allow_html=True)
 
-    # ── ĐĂNG XUẤT — cuối sidebar ──
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:16px 0 10px;'></div>", unsafe_allow_html=True)
     if st.button("🚪 Đăng xuất", use_container_width=True, key="btn_logout"):
         dang_xuat()
+
 # ── HEADER ──
 st.markdown(f"""
 <div class="mtl-header">
@@ -1164,63 +1028,18 @@ st.markdown(f"""
     </div>
   </div>
 </div>
-
-<!-- Thanh giá trị cốt lõi -->
-<div style="background:linear-gradient(90deg,{MTL_NAVY2} 0%,#122d50 100%);
-border-bottom:2px solid {MTL_GOLD}44;
-padding:10px 32px;margin-bottom:8px;
-display:flex;align-items:center;justify-content:center;min-height:48px;">
-
-  <div style="display:flex;align-items:center;gap:10px;padding:0 32px;
-  border-right:1px solid {MTL_GOLD}40;">
-    <span style="font-size:1.1rem;line-height:1;">🤝</span>
-    <div style="display:flex;flex-direction:column;justify-content:center;">
-      <div style="font-size:0.72rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;line-height:1.2;">Cam kết</div>
-      <div style="font-size:0.62rem;color:rgba(201,169,110,0.65);margin-top:2px;line-height:1.3;">Tận tâm phục vụ đến cùng</div>
-    </div>
-  </div>
-
-  <div style="display:flex;align-items:center;gap:10px;padding:0 32px;
-  border-right:1px solid {MTL_GOLD}40;">
-    <span style="font-size:1.1rem;line-height:1;">⚖️</span>
-    <div style="display:flex;flex-direction:column;justify-content:center;">
-      <div style="font-size:0.72rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;line-height:1.2;">Chính trực</div>
-      <div style="font-size:0.62rem;color:rgba(201,169,110,0.65);margin-top:2px;line-height:1.3;">Minh bạch & đạo đức nghề nghiệp</div>
-    </div>
-  </div>
-
-  <div style="display:flex;align-items:center;gap:10px;padding:0 32px;">
-    <span style="font-size:1.1rem;line-height:1;">📚</span>
-    <div style="display:flex;flex-direction:column;justify-content:center;">
-      <div style="font-size:0.72rem;font-weight:800;color:{MTL_GOLD};
-      letter-spacing:1.5px;text-transform:uppercase;line-height:1.2;">Học hỏi</div>
-      <div style="font-size:0.62rem;color:rgba(201,169,110,0.65);margin-top:2px;line-height:1.3;">Không ngừng trau dồi kiến thức</div>
-    </div>
-  </div>
-
-  <div style="margin-left:auto;font-size:0.62rem;color:rgba(201,169,110,0.45);
-  font-style:italic;white-space:nowrap;letter-spacing:0.5px;">OUR EXPERIENCE IS YOUR SUCCESS</div>
-</div>
 """, unsafe_allow_html=True)
 
-# ── Đồng hồ realtime Vietnam (UTC+7) — dùng stc.html để JS execute được ──
 stc.html("""
 <script>
 (function(){
   function tick() {
     var el = window.parent.document.getElementById('mtl-clock');
     if (!el) { setTimeout(tick, 400); return; }
-    var now = new Date();
-    // Chuyển sang giờ Việt Nam (UTC+7)
-    var vn = new Date(now.toLocaleString('en-US', {timeZone: 'Asia/Ho_Chi_Minh'}));
-    var d  = String(vn.getDate()).padStart(2,'0');
-    var mo = String(vn.getMonth()+1).padStart(2,'0');
-    var y  = vn.getFullYear();
-    var h  = String(vn.getHours()).padStart(2,'0');
-    var mi = String(vn.getMinutes()).padStart(2,'0');
-    var s  = String(vn.getSeconds()).padStart(2,'0');
+    var vn = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Ho_Chi_Minh'}));
+    var d=String(vn.getDate()).padStart(2,'0'), mo=String(vn.getMonth()+1).padStart(2,'0');
+    var y=vn.getFullYear(), h=String(vn.getHours()).padStart(2,'0');
+    var mi=String(vn.getMinutes()).padStart(2,'0'), s=String(vn.getSeconds()).padStart(2,'0');
     el.textContent = d+'/'+mo+'/'+y+'  '+h+':'+mi+':'+s;
     setTimeout(tick, 1000);
   }
@@ -1229,14 +1048,9 @@ stc.html("""
 </script>
 """, height=0)
 
-# ── TABS ──
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "🔍 Phân tích hồ sơ",
-    "📝 Soạn thảo văn bản",
-    "💬 Hỏi đáp pháp lý",
-    "📋 Hướng dẫn sử dụng",
-    "📧 Email Intelligence",
-    "📌 Quản lý Công việc",
+    "🔍 Phân tích hồ sơ", "📝 Soạn thảo văn bản", "💬 Hỏi đáp pháp lý",
+    "📋 Hướng dẫn sử dụng", "📧 Email Intelligence", "📌 Quản lý Công việc",
 ])
 
 # ══════════════════════════════════════════════
@@ -1246,86 +1060,66 @@ with tab1:
     st.subheader("🔍 Phân tích hồ sơ vụ việc")
     col_a, col_b = st.columns([2, 1])
     with col_a:
-        yeu_cau = st.text_area(
-            "Yêu cầu phân tích cụ thể (tùy chọn)",
-            placeholder="Ví dụ: Tập trung vào thời hiệu khởi kiện, quyền đòi bồi thường...",
-            height=80,
-        )
+        yeu_cau = st.text_area("Yêu cầu phân tích cụ thể (tùy chọn)",
+            placeholder="Ví dụ: Tập trung vào thời hiệu khởi kiện, quyền đòi bồi thường...", height=80)
     with col_b:
         st.markdown("<br>", unsafe_allow_html=True)
         nut_pt = st.button("🚀 Phân tích ngay", use_container_width=True, type="primary")
 
     if nut_pt:
         if not API_KEY:
-            st.error("❌ Chưa có API Key. Mở Railway → Variables → thêm ANTHROPIC_API_KEY.")
+            st.error("❌ Chưa có API Key.")
         elif not st.session_state.noi_dung_files:
             st.warning("⚠️ Vui lòng tải ít nhất 1 file hồ sơ ở thanh bên trái.")
         else:
             with st.spinner("🤖 AI đang nghiên cứu hồ sơ..."):
                 ket_qua = phan_tich_ho_so(st.session_state.noi_dung_files, yeu_cau)
                 st.session_state.ket_qua_phan_tich = ket_qua
+                # Lưu vào lịch sử hồ sơ để Agent nhớ vụ việc trong phiên sau
+                ten_ho_so = ", ".join([f["ten"] for f in st.session_state.noi_dung_files[:3]])
+                them_ho_so_vao_lich_su(nd["ten_tk"], ten_ho_so, ket_qua)
 
     if "ket_qua_phan_tich" in st.session_state and st.session_state.ket_qua_phan_tich:
         st.markdown("---")
         st.markdown("#### 📊 Kết quả phân tích")
-        st.markdown(
-            f'<div class="result-box">{st.session_state.ket_qua_phan_tich.replace(chr(10), "<br>")}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="result-box">{st.session_state.ket_qua_phan_tich.replace(chr(10), "<br>")}</div>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        word_bytes = tao_file_word(
-            "BÁO CÁO PHÂN TÍCH HỒ SƠ VỤ VIỆC",
-            st.session_state.ket_qua_phan_tich,
-            nd["ho_ten"], nd["chuc_vu"],
-        )
-        st.download_button(
-            "⬇️ Tải xuống file Word", data=word_bytes,
+        word_bytes = tao_file_word("BÁO CÁO PHÂN TÍCH HỒ SƠ VỤ VIỆC",
+            st.session_state.ket_qua_phan_tich, nd["ho_ten"], nd["chuc_vu"])
+        st.download_button("⬇️ Tải xuống file Word", data=word_bytes,
             file_name=f"PhanTich_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 # ══════════════════════════════════════════════
 #  TAB 2 — SOẠN THẢO
 # ══════════════════════════════════════════════
 with tab2:
     st.subheader("📝 Soạn thảo văn bản pháp lý")
-
-    LOAI_DON = [
-        "Đơn khởi kiện", "Đơn yêu cầu thi hành án", "Đơn đề nghị hòa giải",
-        "Đơn tố cáo", "Đơn xin cấp bản sao hồ sơ",
-        "Đơn xin gia hạn nộp tiền tạm ứng án phí",
+    LOAI_DON = ["Đơn khởi kiện", "Đơn yêu cầu thi hành án", "Đơn đề nghị hòa giải",
+        "Đơn tố cáo", "Đơn xin cấp bản sao hồ sơ", "Đơn xin gia hạn nộp tiền tạm ứng án phí",
         "Hợp đồng dịch vụ pháp lý", "Thông báo pháp lý (Legal Notice)",
-        "Biên bản cuộc họp", "Phiếu yêu cầu tư vấn", "Văn bản khác (tự nhập)",
-    ]
-
+        "Biên bản cuộc họp", "Phiếu yêu cầu tư vấn", "Văn bản khác (tự nhập)"]
     col1, col2 = st.columns(2)
     with col1:
         loai_don = st.selectbox("Loại văn bản", LOAI_DON)
     with col2:
         if loai_don == "Văn bản khác (tự nhập)":
             loai_don = st.text_input("Nhập loại văn bản", placeholder="Ví dụ: Đơn phản đối...")
-
-    noi_dung_vv = st.text_area(
-        "Mô tả vụ việc / thông tin cần đưa vào",
-        placeholder="Nguyên đơn: ...\nBị đơn: ...\nNội dung tranh chấp: ...\nYêu cầu: ...",
-        height=140,
-    )
-
+    noi_dung_vv = st.text_area("Mô tả vụ việc / thông tin cần đưa vào",
+        placeholder="Nguyên đơn: ...\nBị đơn: ...\nNội dung tranh chấp: ...\nYêu cầu: ...", height=140)
     if "ket_qua_phan_tich" in st.session_state and st.session_state.ket_qua_phan_tich:
         if st.checkbox("📂 Lấy thông tin từ hồ sơ đã phân tích"):
             noi_dung_vv = st.session_state.ket_qua_phan_tich[:1500]
-
     them = st.text_input("Yêu cầu thêm", placeholder="Ví dụ: Nhấn mạnh điều 166 BLDS...")
 
     if st.button("✍️ Soạn văn bản", type="primary"):
         if not API_KEY:
-            st.error("❌ Chưa có API Key. Mở Railway → Variables → thêm ANTHROPIC_API_KEY.")
+            st.error("❌ Chưa có API Key.")
         elif not noi_dung_vv.strip():
             st.warning("⚠️ Vui lòng nhập thông tin vụ việc.")
         else:
             with st.spinner("🤖 AI đang soạn thảo..."):
-                van_ban = soan_don_tu(loai_don, noi_dung_vv, them)
-                st.session_state.van_ban_soan = van_ban
+                st.session_state.van_ban_soan = soan_don_tu(loai_don, noi_dung_vv, them)
                 st.session_state.loai_van_ban = loai_don
 
     if "van_ban_soan" in st.session_state and st.session_state.van_ban_soan:
@@ -1335,38 +1129,30 @@ with tab2:
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             word_bytes = tao_file_word(st.session_state.loai_van_ban, vb_edit, nd["ho_ten"], nd["chuc_vu"])
-            st.download_button(
-                "⬇️ Tải xuống file Word", data=word_bytes,
+            st.download_button("⬇️ Tải xuống file Word", data=word_bytes,
                 file_name=f"{ten_file}_{datetime.now().strftime('%d%m%Y')}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
+                use_container_width=True)
         with col_d2:
-            st.download_button(
-                "📋 Tải xuống file TXT", data=vb_edit.encode("utf-8"),
+            st.download_button("📋 Tải xuống file TXT", data=vb_edit.encode("utf-8"),
                 file_name=f"{ten_file}_{datetime.now().strftime('%d%m%Y')}.txt",
-                mime="text/plain", use_container_width=True,
-            )
+                mime="text/plain", use_container_width=True)
 
 # ══════════════════════════════════════════════
 #  TAB 3 — HỎI ĐÁP
 # ══════════════════════════════════════════════
 with tab3:
     st.subheader("💬 Hỏi đáp pháp lý")
-
     if "lich_su_chat" not in st.session_state:
         st.session_state.lich_su_chat = []
-
     for tin in st.session_state.lich_su_chat:
         with st.chat_message("user" if tin["role"] == "user" else "assistant",
                              avatar="👤" if tin["role"] == "user" else "⚖️"):
             st.write(tin["content"])
-
     cau_hoi = st.chat_input("Hỏi về pháp luật, vụ việc, hoặc nội dung hồ sơ đã tải lên...")
-
     if cau_hoi:
         if not API_KEY:
-            st.error("❌ Chưa có API Key. Mở Railway → Variables → thêm ANTHROPIC_API_KEY.")
+            st.error("❌ Chưa có API Key.")
         else:
             st.session_state.lich_su_chat.append({"role": "user", "content": cau_hoi})
             with st.chat_message("user", avatar="👤"):
@@ -1376,10 +1162,11 @@ with tab3:
                     tra_loi = hoi_dap(st.session_state.lich_su_chat[:-1], cau_hoi, st.session_state.noi_dung_files)
                     st.write(tra_loi)
                     st.session_state.lich_su_chat.append({"role": "assistant", "content": tra_loi})
-
+                    luu_phien_cua_user(nd["ten_tk"])
     if st.session_state.lich_su_chat:
         if st.button("🗑️ Xóa lịch sử chat"):
             st.session_state.lich_su_chat = []
+            luu_phien_cua_user(nd["ten_tk"])
             st.rerun()
 
 # ══════════════════════════════════════════════
@@ -1390,10 +1177,8 @@ with tab4:
     st.markdown(f"""
 ### 🔑 Cấu hình API Key (chỉ làm 1 lần)
 
-Vào **Railway** → tab **Variables** → thêm:
-```
-ANTHROPIC_API_KEY = sk-ant-...
-```
+Vào **Railway** → tab **Variables** → thêm: `ANTHROPIC_API_KEY = sk-ant-...`
+
 Lấy key tại: **console.anthropic.com**
 
 ---
@@ -1403,11 +1188,11 @@ Lấy key tại: **console.anthropic.com**
 **Bước 1:** Tải hồ sơ vụ việc ở thanh bên trái (PDF, Word, ảnh chụp, chữ viết tay).
 
 **Bước 2:** Chọn chức năng:
-- **Phân tích hồ sơ** — AI đọc toàn bộ hồ sơ, phân tích pháp lý, xuất báo cáo Word.
-- **Soạn thảo văn bản** — Chọn loại đơn, AI soạn đúng mẫu pháp lý, tải về Word.
-- **Hỏi đáp pháp lý** — Chat trực tiếp về luật và hồ sơ đã tải lên.
-- **Email Intelligence** — Đọc email Gmail, phân tích AI, soạn phản hồi tự động.
-- **Quản lý Công việc** — Task list, lịch tuần, báo cáo tự động.
+- **Phân tích hồ sơ** — AI đọc, phân tích pháp lý, xuất báo cáo Word.
+- **Soạn thảo văn bản** — Chọn loại đơn, AI soạn đúng mẫu pháp lý.
+- **Hỏi đáp pháp lý** — Chat với hồ sơ + nhớ vụ việc cũ.
+- **Email Intelligence** — Đọc Gmail, phân tích AI, soạn phản hồi tự động.
+- **Quản lý Công việc** — Task list, lịch tuần, báo cáo Thứ 5 tự động.
 
 ---
 
@@ -1424,13 +1209,39 @@ Lấy key tại: **console.anthropic.com**
 {SBT_CT}
 """)
 
+    # ── Panel kiểm tra Service Account (chỉ admin xem được) ──
+    if nd.get("vai_tro") == "quan_tri":
+        st.markdown("---")
+        st.markdown("### 🔧 Trạng thái Drive Service Account")
+        try:
+            check = kiem_tra_cau_hinh_drive()
+        except NameError:
+            st.error("❌ Hàm kiem_tra_cau_hinh_drive chưa định nghĩa.")
+            check = None
+        if check is not None:
+            if check.get("service_account_ok"):
+                st.success(f"✅ Service Account hoạt động: `{check.get('service_account_email','')}`")
+                st.caption("Email này phải được share với folder của các luật sư (quyền Editor).")
+            else:
+                st.error("❌ CHƯA cấu hình GOOGLE_SERVICE_ACCOUNT_JSON trên Railway Variables.")
+            st.markdown("**Cấu hình Folder ID từng luật sư:**")
+            for uid, ok in check.get("folders_ok", {}).items():
+                ten = TAI_KHOAN.get(uid, {}).get("ho_ten", uid)
+                if ok:
+                    st.markdown(f"✅ **{ten}** (`{uid}`) — Folder ID đã cấu hình")
+                else:
+                    st.markdown(f"❌ **{ten}** (`{uid}`) — <span style='color:red;font-weight:600;'>CHƯA CẤU HÌNH</span>", unsafe_allow_html=True)
+            thieu = check.get("folders_thieu", [])
+            if thieu:
+                st.warning(f"⚠️ Thiếu Folder ID cho: **{', '.join(thieu)}**.")
+            else:
+                st.success("✅ Đã cấu hình đầy đủ Folder ID cho tất cả luật sư.")
+
 # ══════════════════════════════════════════════
 #  TAB 5 — EMAIL INTELLIGENCE
 # ══════════════════════════════════════════════
 
-# ── Gmail API helpers ──────────────────────────────────────────
 def _gmail_service():
-    """Trả về Gmail service của luật sư đang đăng nhập."""
     creds = st.session_state.get(f"gcred_{nd['ten_tk']}")
     if not creds or not creds.valid:
         return None
@@ -1438,42 +1249,27 @@ def _gmail_service():
 
 
 def tai_email_gmail_api(so_luong: int = 12) -> list:
-    """Tải email từ Gmail qua API."""
     svc = _gmail_service()
     if not svc:
         return []
     try:
-        resp = svc.users().messages().list(
-            userId="me", maxResults=so_luong, labelIds=["INBOX"]
-        ).execute()
+        resp = svc.users().messages().list(userId="me", maxResults=so_luong, labelIds=["INBOX"]).execute()
         msgs = resp.get("messages", [])
         results = []
         for m in msgs:
-            full = svc.users().messages().get(
-                userId="me", id=m["id"], format="full"
-            ).execute()
+            full = svc.users().messages().get(userId="me", id=m["id"], format="full").execute()
             headers = {h["name"]: h["value"] for h in full["payload"]["headers"]}
             subject = headers.get("Subject", "(Không có tiêu đề)")
             from_   = headers.get("From", "")
             date_   = headers.get("Date", "")[:22]
-
-            # Parse sender
             _m = re.match(r'"?(.+?)"?\s*<(.+?)>', from_)
             from_name  = _m.group(1).strip() if _m else from_
             from_email = _m.group(2).strip() if _m else from_
-
-            # Lấy text body
             body = _extract_body(full["payload"])
-
             unread = "UNREAD" in full.get("labelIds", [])
             results.append({
-                "id":        m["id"],
-                "fromName":  from_name,
-                "fromEmail": from_email,
-                "subject":   subject,
-                "date":      date_,
-                "body":      body[:4000],
-                "unread":    unread,
+                "id": m["id"], "fromName": from_name, "fromEmail": from_email,
+                "subject": subject, "date": date_, "body": body[:4000], "unread": unread,
             })
         return results
     except Exception as e:
@@ -1482,7 +1278,6 @@ def tai_email_gmail_api(so_luong: int = 12) -> list:
 
 
 def _extract_body(payload: dict) -> str:
-    """Lấy nội dung text/plain từ payload email."""
     if payload.get("mimeType") == "text/plain":
         data = payload.get("body", {}).get("data", "")
         if data:
@@ -1495,43 +1290,53 @@ def _extract_body(payload: dict) -> str:
 
 
 def gui_email_gmail_api(to: str, subject: str, body: str) -> bool:
-    """Gửi email reply qua Gmail API."""
+    """Gửi email reply qua Gmail API — fix encoding tiếng Việt RFC 2047."""
     svc = _gmail_service()
     if not svc:
+        st.error("❌ Chưa kết nối Gmail — đăng nhập lại ở thanh bên.")
         return False
+    to      = (to or "").strip()
+    subject = (subject or "").strip()
+    body    = (body or "").strip()
+    if not to or "@" not in to:
+        st.error(f"❌ Email người nhận không hợp lệ: '{to}'")
+        return False
+    if not body:
+        st.error("❌ Nội dung email rỗng.")
+        return False
+    if not subject:
+        subject = "(Không có tiêu đề)"
+    subj = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     try:
-        import email as email_lib
-        from email.mime.text import MIMEText
-        msg = MIMEText(body, "plain", "utf-8")
-        sender = st.session_state.get(f"gemail_{nd['ten_tk']}", "me")
+        from email.message import EmailMessage
+        sender = st.session_state.get(f"gemail_{nd['ten_tk']}", "") or "me"
+        msg = EmailMessage()
+        msg.set_content(body, charset="utf-8")
+        msg["Subject"] = subj
         msg["From"]    = sender
         msg["To"]      = to
-        msg["Subject"] = f"Re: {subject}"
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        svc.users().messages().send(
-            userId="me", body={"raw": raw}
-        ).execute()
+        svc.users().messages().send(userId="me", body={"raw": raw}).execute()
         return True
     except Exception as e:
-        st.error(f"Gửi email lỗi: {e}")
+        err = str(e)
+        if "400" in err or "invalid" in err.lower():
+            st.error(f"❌ Gmail từ chối (400). Người nhận: `{to}`. Chi tiết: {err}")
+        elif "401" in err or "unauthorized" in err.lower():
+            st.error("❌ Token Gmail hết hạn. Sidebar → Ngắt kết nối → Đăng nhập lại.")
+        else:
+            st.error(f"❌ Gửi email lỗi: {err}")
         return False
 
 
-# ── AI helpers — tái sử dụng goi_claude() ──────────────────────
 def phan_tich_email_phap_ly(email: dict) -> dict:
     system = f"Bạn là trợ lý pháp lý tại {TEN_CONG_TY}. Trả về JSON thuần, không markdown."
     prompt = f"""Phân tích email và trả về đúng JSON:
-{{
-  "urgency": "high|medium|low", "urgency_score": 0-100,
-  "urgency_reason": "lý do", "category": "loại vụ việc",
-  "summary": "tóm tắt 1-2 câu",
-  "legal_issues": ["vấn đề 1","vấn đề 2"],
-  "relevant_laws": ["Luật 1","Luật 2"],
-  "parties": [{{"role":"vai trò","name":"tên"}}],
-  "action_items": ["việc 1","việc 2"],
-  "deadline": "thời hạn hoặc null",
-  "risk_level": "Cao|Trung bình|Thấp"
-}}
+{{"urgency": "high|medium|low", "urgency_score": 0-100, "urgency_reason": "lý do",
+"category": "loại vụ việc", "summary": "tóm tắt 1-2 câu",
+"legal_issues": ["vấn đề 1","vấn đề 2"], "relevant_laws": ["Luật 1","Luật 2"],
+"parties": [{{"role":"vai trò","name":"tên"}}], "action_items": ["việc 1","việc 2"],
+"deadline": "thời hạn hoặc null", "risk_level": "Cao|Trung bình|Thấp"}}
 Tiêu đề: {email.get('subject','')}
 Từ: {email.get('fromName','')} <{email.get('fromEmail','')}>
 Nội dung:\n{email.get('body','')[:3000]}"""
@@ -1541,95 +1346,64 @@ Nội dung:\n{email.get('body','')[:3000]}"""
     except Exception:
         return {}
 
+
 def lam_sach_markdown(text: str) -> str:
-    """
-    Quét sạch mọi ký tự markdown khỏi văn bản trước khi gửi đối tác:
-    bỏ **bold**, *italic*, __underline__, `code`, # heading, > quote, - bullet, • bullet.
-    Đây là tấm lưới an toàn — phòng trường hợp AI vẫn xuất markdown dù đã yêu cầu không.
-    """
+    """Quét sạch markdown khỏi văn bản trước khi gửi đối tác."""
     if not text:
         return text
-
-    # 1. Bỏ định dạng bold/italic: **abc**, __abc__, *abc*, _abc_
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"__(.+?)__",     r"\1", text, flags=re.DOTALL)
     text = re.sub(r"(?<!\w)\*([^\*\n]+?)\*(?!\w)", r"\1", text)
     text = re.sub(r"(?<!\w)_([^_\n]+?)_(?!\w)",     r"\1", text)
-
-    # 2. Bỏ inline code `abc`
     text = re.sub(r"`([^`]+)`", r"\1", text)
-
-    # 3. Bỏ heading #, ##, ### đầu dòng
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
-
-    # 4. Bỏ blockquote > đầu dòng
     text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
-
-    # 5. Đổi bullet đầu dòng (- / * / •) thành chữ thường
     text = re.sub(r"^[\s]*[-•*]\s+", "", text, flags=re.MULTILINE)
-
-    # 6. Quét dọn — xóa mọi dấu sao còn sót lại (an toàn cuối)
     text = text.replace("**", "").replace("*", "")
-
-    # 7. Gọn dòng trống thừa (3+ xuống dòng → 2)
     text = re.sub(r"\n{3,}", "\n\n", text)
-
     return text.strip()
+
+
 def soan_phan_hoi(email: dict, analysis: dict, tone: str) -> str:
     tone_map = {
-        "formal":   "trang trọng tối đa, văn phong luật sư cao cấp, sử dụng kính ngữ pháp lý chuẩn mực",
-        "friendly": "trang trọng nhưng ấm áp, thể hiện sự quan tâm chân thành mà vẫn chuyên nghiệp",
-        "firm":     "trang trọng, kiên quyết, dứt khoát, thể hiện rõ thẩm quyền và quan điểm pháp lý",
-        "urgent":   "trang trọng, khẩn cấp, nhấn mạnh tính cấp thiết và đề nghị hành động kịp thời",
+        "formal":   "trang trọng tối đa, văn phong luật sư cao cấp",
+        "friendly": "trang trọng nhưng ấm áp, thể hiện sự quan tâm",
+        "firm":     "trang trọng, kiên quyết, dứt khoát",
+        "urgent":   "trang trọng, khẩn cấp, nhấn mạnh tính cấp thiết",
     }
     ctx = ""
     if analysis:
         ctx = (f"\n\nGHI CHÚ NỘI BỘ (không đưa vào email):\n"
-               f"- Tóm tắt vụ việc: {analysis.get('summary','')}\n"
+               f"- Tóm tắt: {analysis.get('summary','')}\n"
                f"- Hành động nội bộ: {'; '.join(analysis.get('action_items',[]))}")
-
     system = (
-        f"Bạn là Luật sư cao cấp tại {TEN_CONG_TY} — một hãng luật uy tín tại Việt Nam, "
-        f"chuyên giải quyết tranh chấp, bất động sản và doanh nghiệp, phục vụ khách hàng VVIP. "
-        f"Bạn soạn email phản hồi với phong thái của một luật sư hàng đầu: trang trọng, súc tích, "
-        f"có chiều sâu pháp lý nhưng không phô trương.\n\n"
-        f"QUY TẮC TRÌNH BÀY — BẮT BUỘC TUÂN THỦ NGHIÊM NGẶT:\n"
-        f"1. TUYỆT ĐỐI KHÔNG dùng bất kỳ ký tự markdown nào: KHÔNG dấu sao (*), KHÔNG dấu thăng (#), "
+        f"Bạn là Luật sư cao cấp tại {TEN_CONG_TY}. "
+        f"Soạn email phản hồi với phong thái luật sư hàng đầu: trang trọng, súc tích.\n\n"
+        f"QUY TẮC TRÌNH BÀY BẮT BUỘC:\n"
+        f"1. TUYỆT ĐỐI KHÔNG dùng markdown: KHÔNG dấu sao (*), KHÔNG dấu thăng (#), "
         f"KHÔNG gạch ngang đầu dòng (-), KHÔNG chấm tròn (•), KHÔNG backtick (`), KHÔNG gạch dưới (_).\n"
-        f"2. Khi cần liệt kê, dùng cách diễn đạt pháp lý trang trọng: 'Thứ nhất, ...', 'Thứ hai, ...', "
-        f"'Thứ ba, ...' hoặc '(i) ..., (ii) ..., (iii) ...'.\n"
-        f"3. Khi cần nhấn mạnh, dùng câu văn rõ ràng hoặc viết HOA cụm từ then chốt — không bao quanh bằng dấu sao.\n"
-        f"4. Dùng kính ngữ chuẩn mực: 'Kính gửi Quý Khách hàng', 'Quý Công ty', 'Quý vị', "
-        f"'chúng tôi trân trọng', 'kính đề nghị', 'rất hân hạnh được phục vụ Quý vị'.\n"
-        f"5. Mỗi đoạn văn phải hoàn chỉnh, mạch lạc, không cụt câu, không viết tắt thiếu tôn trọng.\n"
-        f"6. Văn phong: trang trọng tối đa, súc tích, không cảm thán, không dùng emoji, không thân mật quá mức."
+        f"2. Liệt kê bằng diễn đạt pháp lý: 'Thứ nhất, ...', 'Thứ hai, ...' hoặc '(i) ..., (ii) ...'.\n"
+        f"3. Nhấn mạnh bằng viết HOA cụm từ then chốt — không dùng dấu sao.\n"
+        f"4. Kính ngữ chuẩn mực: 'Kính gửi Quý Khách hàng', 'Quý Công ty', 'trân trọng', 'kính đề nghị'.\n"
+        f"5. Văn phong trang trọng, súc tích, không emoji, không thân mật quá mức."
     )
-
     prompt = (
-        f"Hãy soạn email phản hồi tiếng Việt cho email dưới đây, theo giọng văn "
-        f"{tone_map.get(tone, tone_map['formal'])}.\n\n"
-        f"CẤU TRÚC BẮT BUỘC (viết liền mạch thành các đoạn văn, KHÔNG đánh số hay gạch đầu dòng):\n"
-        f"• Dòng mở: 'Kính gửi Quý Ông/Quý Bà [tên người nhận],' (chọn xưng hô phù hợp giới tính tên gọi)\n"
-        f"• Đoạn 1: Trân trọng xác nhận đã nhận được email và bày tỏ cảm ơn về sự tin tưởng.\n"
-        f"• Đoạn 2: Tóm lược súc tích nội dung Quý vị trình bày, thể hiện đã nghiên cứu kỹ.\n"
-        f"• Đoạn 3: Nêu hướng xử lý hoặc quan điểm pháp lý sơ bộ một cách thận trọng, chuyên nghiệp.\n"
-        f"• Đoạn 4: Đề xuất bước tiếp theo cụ thể (cuộc họp tư vấn, tài liệu cần cung cấp thêm, v.v.) "
-        f"kèm mốc thời gian rõ ràng.\n"
-        f"• Đoạn kết: Lời cảm ơn và cam kết phục vụ tận tâm.\n"
-        f"• Khối ký tên (mỗi dòng riêng):\n"
-        f"    Trân trọng,\n"
-        f"    {nd['ho_ten']}\n"
-        f"    {nd['chuc_vu']}\n"
-        f"    {TEN_CONG_TY}\n\n"
-        f"NHẮC LẠI: KHÔNG viết tiêu đề/subject. KHÔNG sử dụng ký tự markdown dưới mọi hình thức.\n\n"
+        f"Soạn email phản hồi tiếng Việt theo giọng văn {tone_map.get(tone, tone_map['formal'])}.\n\n"
+        f"CẤU TRÚC (viết liền mạch thành đoạn văn, KHÔNG đánh số/gạch đầu dòng):\n"
+        f"• Dòng mở: 'Kính gửi Quý Ông/Quý Bà [tên],'\n"
+        f"• Đoạn 1: Xác nhận đã nhận email và cảm ơn sự tin tưởng.\n"
+        f"• Đoạn 2: Tóm lược nội dung Quý vị trình bày.\n"
+        f"• Đoạn 3: Hướng xử lý hoặc quan điểm pháp lý sơ bộ.\n"
+        f"• Đoạn 4: Đề xuất bước tiếp theo cụ thể, kèm mốc thời gian.\n"
+        f"• Đoạn kết: Lời cảm ơn và cam kết phục vụ.\n"
+        f"• Khối ký tên:\n    Trân trọng,\n    {nd['ho_ten']}\n    {nd['chuc_vu']}\n    {TEN_CONG_TY}\n\n"
+        f"NHẮC LẠI: KHÔNG viết subject. KHÔNG dùng markdown.\n\n"
         f"━━━━━ EMAIL CẦN PHẢN HỒI ━━━━━\n"
-        f"Tiêu đề gốc: {email.get('subject','')}\n"
+        f"Tiêu đề: {email.get('subject','')}\n"
         f"Người gửi: {email.get('fromName','')} <{email.get('fromEmail','')}>\n"
         f"Nội dung:\n{email.get('body','')[:2000]}{ctx}"
     )
-
-    result = goi_claude([{"role": "user", "content": prompt}], system)
-    return lam_sach_markdown(result)
+    return lam_sach_markdown(goi_claude([{"role": "user", "content": prompt}], system))
 
 
 def gan_tag(email: dict) -> list:
@@ -1647,60 +1421,38 @@ def gan_tag(email: dict) -> list:
 EMAIL_MAU = [
     {"id":"m1","unread":True,"fromName":"Nguyễn Văn Minh","fromEmail":"nvminh@vietcorp.vn",
      "date":"09:42","subject":"Tranh chấp hợp đồng mua bán căn hộ — cần tư vấn khẩn",
-     "body":"Kính gửi Luật sư,\n\nTôi đã ký hợp đồng mua căn hộ tại dự án Green Valley ngày 15/03/2024, giá trị 3,2 tỷ đồng. Chủ đầu tư vi phạm:\n1. Trễ bàn giao 8 tháng\n2. Từ chối trả phạt điều 9 (0.05%/ngày)\n3. Đơn phương thay đổi thiết kế\n\nCần tư vấn khẩn.\n\nTrân trọng,\nNguyễn Văn Minh"},
+     "body":"Kính gửi Luật sư,\n\nTôi đã ký hợp đồng mua căn hộ tại dự án Green Valley ngày 15/03/2024, giá trị 3,2 tỷ đồng. Chủ đầu tư vi phạm:\n1. Trễ bàn giao 8 tháng\n2. Từ chối trả phạt\n3. Đơn phương thay đổi thiết kế\n\nTrân trọng,\nNguyễn Văn Minh"},
     {"id":"m2","unread":True,"fromName":"Trần Thị Hà","fromEmail":"ttha@mfg.com.vn",
      "date":"Hôm qua","subject":"Soát xét hợp đồng phân phối độc quyền 5M USD",
-     "body":"Luật sư kính mến,\n\nChuẩn bị ký hợp đồng phân phối với Korea Tech Co., Ltd., giá trị 5M USD/năm. Cần soát xét Điều 6, 12, 15 và Phụ lục A.\nHạn ký: 30/04/2025.\n\nTrân trọng,\nTrần Thị Hà"},
-    {"id":"m3","unread":False,"fromName":"Phạm Quốc Bảo","fromEmail":"pqbao@startup.io",
-     "date":"20/04","subject":"Tư vấn thành lập startup FinTech P2P Lending",
-     "body":"Kính gửi Văn phòng Luật Minh Tú,\n\nCần tư vấn thành lập startup FinTech (P2P Lending):\n1. Hình thức pháp nhân\n2. Cấu trúc vốn Seed từ Singapore\n3. NĐ 52/2021\n\nNgân sách: 50-80tr.\n\nTrân trọng, Phạm Quốc Bảo"},
+     "body":"Luật sư kính mến,\n\nChuẩn bị ký hợp đồng phân phối với Korea Tech, giá trị 5M USD/năm. Cần soát xét Điều 6, 12, 15.\n\nTrân trọng,\nTrần Thị Hà"},
 ]
 
 
-# ══════════════════════════════════════════════
-#  RENDER TAB 5
-# ══════════════════════════════════════════════
 with tab5:
-    # ⚠️ FIX: Thêm "ei_ta" vào session_state init để text_area hoạt động đúng
     for _k, _v in {
         "ei_emails":[], "ei_selected":None,
         "ei_analysis":None, "ei_draft":"",
-        "ei_ta":"",                              # ← KEY của text_area, BẮT BUỘC khởi tạo
-        "ei_tone":"formal", "ei_sent":[],
+        "ei_ta":"", "ei_tone":"formal", "ei_sent":[],
     }.items():
         if _k not in st.session_state:
             st.session_state[_k] = _v
 
-    # Kiểm tra kết nối
-    _connected = bool(
-        st.session_state.get(f"gcred_{nd['ten_tk']}") and
-        st.session_state.get(f"gcred_{nd['ten_tk']}").valid
-    )
+    _connected = bool(st.session_state.get(f"gcred_{nd['ten_tk']}") and st.session_state.get(f"gcred_{nd['ten_tk']}").valid)
     _gmail_addr = st.session_state.get(f"gemail_{nd['ten_tk']}", "")
-
-    # Banner
-    _status = (f"<span style='color:#90ee90;'>✅ {_gmail_addr}</span>"
-               if _connected else
+    _status = (f"<span style='color:#90ee90;'>✅ {_gmail_addr}</span>" if _connected else
                "<span style='color:#ffa07a;'>⚠️ Chưa kết nối — nhấn nút Google ở thanh bên</span>")
+
     st.markdown(f"""
-<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);
-border-radius:10px;padding:14px 20px;margin-bottom:18px;
-border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content:space-between;">
-  <div>
-    <span style="color:white;font-size:1.05rem;font-weight:700;">📧 Email Intelligence</span>
-    <span style="color:{MTL_GOLD2};font-size:0.8rem;margin-left:12px;">
-      Gmail API · Phân tích pháp lý AI · Soạn thảo tự động
-    </span>
-  </div>
+<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);border-radius:10px;padding:14px 20px;margin-bottom:18px;border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content:space-between;">
+  <div><span style="color:white;font-size:1.05rem;font-weight:700;">📧 Email Intelligence</span>
+    <span style="color:{MTL_GOLD2};font-size:0.8rem;margin-left:12px;">Gmail API · Phân tích AI · Soạn thảo tự động</span></div>
   <div>{_status}</div>
 </div>""", unsafe_allow_html=True)
 
     col_inbox, col_email, col_ai = st.columns([1.2, 2, 1.8])
 
-    # ── CỘT 1: HỘP THƯ ──────────────────────
     with col_inbox:
-        st.markdown(f"<div style='font-weight:700;color:{MTL_NAVY};margin-bottom:8px;'>📬 Hộp thư</div>",
-                    unsafe_allow_html=True)
+        st.markdown(f"<div style='font-weight:700;color:{MTL_NAVY};margin-bottom:8px;'>📬 Hộp thư</div>", unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
             if st.button("↻ Tải email", use_container_width=True, key="ei_load"):
@@ -1712,8 +1464,6 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                     if emails:
                         st.session_state.ei_emails = emails
                         st.rerun()
-                    else:
-                        st.error("Không tải được email")
         with c2:
             if st.button("📋 Demo", use_container_width=True, key="ei_demo"):
                 st.session_state.ei_emails = EMAIL_MAU
@@ -1721,9 +1471,7 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
 
         emails = st.session_state.ei_emails
         if not emails:
-            st.markdown("<div style='color:#aaa;font-size:0.82rem;text-align:center;"
-                        "padding:24px 0;'>Đăng nhập Gmail → Tải email<br>hoặc nhấn Demo</div>",
-                        unsafe_allow_html=True)
+            st.markdown("<div style='color:#aaa;font-size:0.82rem;text-align:center;padding:24px 0;'>Đăng nhập Gmail → Tải email<br>hoặc nhấn Demo</div>", unsafe_allow_html=True)
         else:
             chua_doc = sum(1 for e in emails if e.get("unread"))
             st.caption(f"{chua_doc} chưa đọc · {len(emails)} tổng")
@@ -1737,39 +1485,25 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                              key=f"ei_em_{em['id']}", use_container_width=True,
                              type="primary" if is_sel else "secondary"):
                     st.session_state.ei_selected = em
-                    st.session_state.ei_analysis  = None
-                    # FIX: Reset cả ei_draft và ei_ta khi đổi email
-                    st.session_state.ei_draft     = ""
-                    st.session_state.ei_ta        = ""
+                    st.session_state.ei_analysis = None
+                    st.session_state.ei_draft = ""
+                    st.session_state.ei_ta = ""
                     st.rerun()
 
-    # ── CỘT 2: NỘI DUNG EMAIL ───────────────
     with col_email:
         em = st.session_state.ei_selected
         if em is None:
-            st.markdown("<div style='color:#aaa;text-align:center;padding:80px 0;'>"
-                        "👈 Chọn email để xem</div>", unsafe_allow_html=True)
+            st.markdown("<div style='color:#aaa;text-align:center;padding:80px 0;'>👈 Chọn email để xem</div>", unsafe_allow_html=True)
         else:
-            st.markdown(
-                f"<div style='font-size:1rem;font-weight:700;color:{MTL_NAVY};"
-                f"border-bottom:2px solid {MTL_GOLD}44;padding-bottom:8px;margin-bottom:10px;'>"
-                f"{em['subject']}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='font-size:1rem;font-weight:700;color:{MTL_NAVY};border-bottom:2px solid {MTL_GOLD}44;padding-bottom:8px;margin-bottom:10px;'>{em['subject']}</div>", unsafe_allow_html=True)
             m1, m2 = st.columns(2)
             m1.markdown(f"**Từ:** {em['fromName']}  \n`{em['fromEmail']}`")
             m2.markdown(f"**Lúc:** {em.get('date','')}")
-            tags_html = " &nbsp;".join(
-                f"<span style='background:{MTL_NAVY}11;border:1px solid {MTL_NAVY}33;"
-                f"border-radius:4px;padding:2px 8px;font-size:0.75rem;'>{t}</span>"
-                for t in gan_tag(em))
+            tags_html = " &nbsp;".join(f"<span style='background:{MTL_NAVY}11;border:1px solid {MTL_NAVY}33;border-radius:4px;padding:2px 8px;font-size:0.75rem;'>{t}</span>" for t in gan_tag(em))
             st.markdown(tags_html, unsafe_allow_html=True)
             st.divider()
             body_safe = em["body"].replace("<","&lt;").replace(">","&gt;")
-            st.markdown(
-                f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;"
-                f"border-left:3px solid {MTL_NAVY};border-radius:0 8px 8px 0;"
-                f"padding:16px 18px;font-size:0.87rem;line-height:1.85;"
-                f"white-space:pre-wrap;max-height:360px;overflow-y:auto;'>"
-                f"{body_safe}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;border-left:3px solid {MTL_NAVY};border-radius:0 8px 8px 0;padding:16px 18px;font-size:0.87rem;line-height:1.85;white-space:pre-wrap;max-height:360px;overflow-y:auto;'>{body_safe}</div>", unsafe_allow_html=True)
             st.divider()
             qa, qb, qc = st.columns(3)
             with qa:
@@ -1780,11 +1514,9 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
             with qb:
                 if st.button("✦ Soạn thảo", use_container_width=True, key="ei_draft_btn"):
                     with st.spinner("Claude đang soạn..."):
-                        draft_text = soan_phan_hoi(
-                            em, st.session_state.ei_analysis, st.session_state.ei_tone)
-                    # FIX: Gán cả ei_ta (key của widget) và ei_draft
+                        draft_text = soan_phan_hoi(em, st.session_state.ei_analysis, st.session_state.ei_tone)
                     st.session_state.ei_draft = draft_text
-                    st.session_state.ei_ta    = draft_text
+                    st.session_state.ei_ta = draft_text
                     st.rerun()
             with qc:
                 if st.button("📄 Tạo văn bản", use_container_width=True, key="ei_docbtn"):
@@ -1792,51 +1524,33 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                     if a:
                         nd_vb = (f"Vụ việc: {em['subject']}\nKhách hàng: {em['fromName']}\n\n"
                                  f"Tóm tắt: {a.get('summary','')}\n\n"
-                                 f"Vấn đề pháp lý:\n" + "\n".join(f"- {i}" for i in a.get("legal_issues",[])) +
-                                 f"\n\nHành động:\n" + "\n".join(f"{i+1}. {x}" for i,x in enumerate(a.get("action_items",[]))))
-                        vb = soan_don_tu("Thư tư vấn pháp lý", nd_vb)
-                        st.session_state.van_ban_soan  = vb
+                                 f"Vấn đề pháp lý:\n" + "\n".join(f"- {i}" for i in a.get("legal_issues",[])))
+                        st.session_state.van_ban_soan = soan_don_tu("Thư tư vấn pháp lý", nd_vb)
                         st.session_state.loai_van_ban = "Thư tư vấn pháp lý"
                         st.success("✅ Đã tạo — xem tab Soạn thảo văn bản")
-                    else:
-                        st.warning("Phân tích AI trước")
 
-    # ── CỘT 3: AI PANEL ─────────────────────
     with col_ai:
         if st.session_state.ei_selected is None:
             st.info("Chọn email để bắt đầu")
         else:
             em = st.session_state.ei_selected
             ai1, ai2, ai3 = st.tabs(["🔍 Phân tích", "✍ Soạn thảo", "📤 Đã gửi"])
-
             with ai1:
                 a = st.session_state.ei_analysis
                 if a is None:
-                    st.markdown("<div style='color:#aaa;text-align:center;padding:24px 0;'>"
-                                "Nhấn 🔍 Phân tích AI</div>", unsafe_allow_html=True)
+                    st.markdown("<div style='color:#aaa;text-align:center;padding:24px 0;'>Nhấn 🔍 Phân tích AI</div>", unsafe_allow_html=True)
                 elif a == {}:
-                    st.error("Phân tích thất bại — kiểm tra API Key")
+                    st.error("Phân tích thất bại")
                 else:
                     score = a.get("urgency_score", 0)
                     level = a.get("urgency","low")
                     bar_c = {"high":"#e53e3e","medium":"#d69e2e","low":"#38a169"}.get(level,"#718096")
                     urg_l = {"high":"🔴 Khẩn cấp","medium":"🟡 Trung bình","low":"🟢 Thấp"}.get(level,"")
-                    st.markdown(
-                        f"<div style='display:flex;justify-content:space-between;margin-bottom:4px;'>"
-                        f"<b style='font-size:0.85rem;'>{urg_l}</b>"
-                        f"<span style='color:#718096;font-size:0.8rem;'>{score}/100</span></div>"
-                        f"<div style='background:#e2e8f0;border-radius:4px;height:6px;'>"
-                        f"<div style='background:{bar_c};width:{score}%;height:6px;border-radius:4px;'></div></div>",
-                        unsafe_allow_html=True)
+                    st.markdown(f"<div style='display:flex;justify-content:space-between;margin-bottom:4px;'><b style='font-size:0.85rem;'>{urg_l}</b><span style='color:#718096;font-size:0.8rem;'>{score}/100</span></div><div style='background:#e2e8f0;border-radius:4px;height:6px;'><div style='background:{bar_c};width:{score}%;height:6px;border-radius:4px;'></div></div>", unsafe_allow_html=True)
                     st.caption(a.get("urgency_reason",""))
                     if a.get("deadline"):
                         st.warning(f"⏱ {a['deadline']}")
-                    st.markdown(
-                        f"<div style='background:{MTL_NAVY}08;border-left:3px solid {MTL_GOLD};"
-                        f"border-radius:0 6px 6px 0;padding:10px 12px;margin:10px 0;'>"
-                        f"<b style='font-size:0.85rem;color:{MTL_NAVY};'>{a.get('category','')}</b><br>"
-                        f"<span style='font-size:0.82rem;color:#4a5568;'>{a.get('summary','')}</span></div>",
-                        unsafe_allow_html=True)
+                    st.markdown(f"<div style='background:{MTL_NAVY}08;border-left:3px solid {MTL_GOLD};border-radius:0 6px 6px 0;padding:10px 12px;margin:10px 0;'><b style='font-size:0.85rem;color:{MTL_NAVY};'>{a.get('category','')}</b><br><span style='font-size:0.82rem;color:#4a5568;'>{a.get('summary','')}</span></div>", unsafe_allow_html=True)
                     if a.get("legal_issues"):
                         with st.expander("⚖ Vấn đề pháp lý", expanded=True):
                             for iss in a["legal_issues"]: st.markdown(f"- {iss}")
@@ -1846,53 +1560,22 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                     if a.get("action_items"):
                         with st.expander("✅ Hành động", expanded=True):
                             for i, act in enumerate(a["action_items"],1): st.markdown(f"{i}. {act}")
-                    risk = a.get("risk_level","")
-                    risk_ic = {"Cao":"🔴","Trung bình":"🟡","Thấp":"🟢"}.get(risk,"")
-                    st.divider()
-                    st.caption(f"Rủi ro: {risk_ic} {risk}")
-                    bao_cao = (
-                        f"VỤ VIỆC: {em['subject']}\nKHÁCH HÀNG: {em['fromName']}\n\n"
-                        f"TÓM TẮT:\n{a.get('summary','')}\n\n"
-                        f"VẤN ĐỀ PHÁP LÝ:\n" + "\n".join(f"- {i}" for i in a.get("legal_issues",[])) +
-                        f"\n\nCĂN CỨ PHÁP LÝ:\n" + "\n".join(f"- {l}" for l in a.get("relevant_laws",[])) +
-                        f"\n\nHÀNH ĐỘNG CẦN LÀM:\n" + "\n".join(f"{i+1}. {x}" for i,x in enumerate(a.get("action_items",[]))))
-                    wb = tao_file_word("BÁO CÁO PHÂN TÍCH EMAIL", bao_cao, nd["ho_ten"], nd["chuc_vu"])
-                    st.download_button("⬇️ Xuất báo cáo Word", data=wb,
-                        file_name=f"PhanTichEmail_{datetime.now().strftime('%d%m%Y_%H%M')}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True)
 
             with ai2:
-                tone_vi = {"formal":"Trang trọng","friendly":"Thân thiện",
-                           "firm":"Kiên quyết","urgent":"Khẩn cấp"}
+                tone_vi = {"formal":"Trang trọng","friendly":"Thân thiện","firm":"Kiên quyết","urgent":"Khẩn cấp"}
                 tone_sel = st.radio("Giọng văn", options=list(tone_vi.keys()),
-                                    format_func=lambda x: tone_vi[x],
-                                    horizontal=True, key="ei_tone_r")
+                                    format_func=lambda x: tone_vi[x], horizontal=True, key="ei_tone_r")
                 st.session_state.ei_tone = tone_sel
-
-                # ⚠️ FIX QUAN TRỌNG: Khi bấm "Tạo nháp AI" phải gán
-                # giá trị vào CẢ ei_draft VÀ ei_ta (key của widget)
                 if st.button("✦ Tạo nháp AI", use_container_width=True, key="ei_gen"):
                     with st.spinner("Claude đang soạn..."):
-                        ai_draft = soan_phan_hoi(
-                            em, st.session_state.ei_analysis, tone_sel)
+                        ai_draft = soan_phan_hoi(em, st.session_state.ei_analysis, tone_sel)
                     st.session_state.ei_draft = ai_draft
-                    st.session_state.ei_ta    = ai_draft   # ← BẮT BUỘC để text_area cập nhật
+                    st.session_state.ei_ta = ai_draft
                     st.rerun()
-
                 reply_to = st.text_input("Gửi đến", value=em.get("fromEmail",""), key="ei_to")
-
-                # ⚠️ FIX: Bỏ tham số value=, chỉ giữ key= — Streamlit sẽ
-                # tự lấy giá trị từ st.session_state.ei_ta
-                draft = st.text_area(
-                    "Nội dung phản hồi",
-                    height=240,
-                    key="ei_ta",
-                    placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn...",
-                )
-                # Đồng bộ giá trị user gõ vào ei_draft (giữ tương thích logic gốc)
+                draft = st.text_area("Nội dung phản hồi", height=240, key="ei_ta",
+                    placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn...")
                 st.session_state.ei_draft = draft
-
                 sa, sb = st.columns(2)
                 with sa:
                     if draft.strip():
@@ -1902,8 +1585,7 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             use_container_width=True)
                 with sb:
-                    if st.button("📤 Gửi Gmail", type="primary",
-                                 use_container_width=True, key="ei_send"):
+                    if st.button("📤 Gửi Gmail", type="primary", use_container_width=True, key="ei_send"):
                         if not draft.strip():
                             st.warning("Nhập nội dung trước")
                         elif not _connected:
@@ -1916,10 +1598,10 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                                     "to": reply_to, "subject": em["subject"],
                                     "body": draft, "time": datetime.now().strftime("%H:%M %d/%m"),
                                 })
+                                luu_phien_cua_user(nd["ten_tk"])
                                 st.success("✅ Email đã gửi!")
-                                # FIX: Reset cả ei_draft và ei_ta sau khi gửi
                                 st.session_state.ei_draft = ""
-                                st.session_state.ei_ta    = ""
+                                st.session_state.ei_ta = ""
                                 st.rerun()
 
             with ai3:
@@ -1932,63 +1614,47 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                             st.markdown(f"**{item['subject']}**")
                             st.text(item["body"][:300] + ("…" if len(item["body"])>300 else ""))
 
-
 # ══════════════════════════════════════════════════════════════
-#  GOOGLE CALENDAR HELPERS
+#  TAB 6 — QUẢN LÝ CÔNG VIỆC
 # ══════════════════════════════════════════════════════════════
 
 def _gcal_service():
-    """Trả về Google Calendar service của người dùng hiện tại."""
     creds = st.session_state.get(f"gcred_{nd['ten_tk']}")
     if not creds or not creds.valid:
         return None
     try:
-        from googleapiclient.discovery import build as _build
-        return _build("calendar", "v3", credentials=creds)
+        return build("calendar", "v3", credentials=creds)
     except Exception:
         return None
 
-def lay_su_kien_gcal(week_start: datetime, week_end: datetime) -> list:
-    """
-    Tải sự kiện Google Calendar của tuần được chọn.
-    Trả về list dict: {title, date_str, time_str, color, all_day, calendar_name}
-    """
+
+def lay_su_kien_gcal(week_start, week_end):
     svc = _gcal_service()
     if not svc:
         return []
     try:
         time_min = week_start.isoformat() + "Z"
         time_max = (week_end + timedelta(days=1)).isoformat() + "Z"
-        # Lấy danh sách calendars của user (tối đa 10)
         cal_list = svc.calendarList().list(maxResults=10).execute()
         calendars = cal_list.get("items", [])
-
         all_events = []
-        cal_colors = {
-            0: "#1E4D82", 1: "#A8874A", 2: "#0f6e56", 3: "#7B3F8C",
-            4: "#B94040", 5: "#3A6EA5", 6: "#E06C1A", 7: "#2E8B57",
-            8: "#8B4513", 9: "#4682B4",
-        }
+        cal_colors = {0:"#1E4D82",1:"#A8874A",2:"#0f6e56",3:"#7B3F8C",4:"#B94040",5:"#3A6EA5"}
         for idx, cal in enumerate(calendars):
-            cal_id    = cal["id"]
-            cal_name  = cal.get("summary", cal_id)
-            bg_color  = cal.get("backgroundColor", cal_colors.get(idx % 10, "#1E4D82"))
+            cal_id = cal["id"]
+            cal_name = cal.get("summary", cal_id)
+            bg_color = cal.get("backgroundColor", cal_colors.get(idx % 6, "#1E4D82"))
             try:
                 events_result = svc.events().list(
-                    calendarId   = cal_id,
-                    timeMin      = time_min,
-                    timeMax      = time_max,
-                    singleEvents = True,
-                    orderBy      = "startTime",
-                    maxResults   = 50,
+                    calendarId=cal_id, timeMin=time_min, timeMax=time_max,
+                    singleEvents=True, orderBy="startTime", maxResults=50,
                 ).execute()
                 for ev in events_result.get("items", []):
                     start = ev.get("start", {})
-                    end_  = ev.get("end",   {})
-                    all_day   = "date"     in start and "dateTime" not in start
-                    date_raw  = start.get("dateTime", start.get("date", ""))
-                    date_str  = date_raw[:10]
-                    time_str  = ""
+                    end_  = ev.get("end", {})
+                    all_day = "date" in start and "dateTime" not in start
+                    date_raw = start.get("dateTime", start.get("date", ""))
+                    date_str = date_raw[:10]
+                    time_str = ""
                     if not all_day and "dateTime" in start:
                         try:
                             dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00"))
@@ -1997,41 +1663,29 @@ def lay_su_kien_gcal(week_start: datetime, week_end: datetime) -> list:
                         except Exception:
                             time_str = date_raw[11:16]
                     all_events.append({
-                        "id":            ev.get("id", ""),
-                        "title":         ev.get("summary", "(Không có tiêu đề)"),
-                        "date_str":      date_str,
-                        "time_str":      time_str,
-                        "all_day":       all_day,
-                        "color":         bg_color,
-                        "calendar_name": cal_name,
-                        "location":      ev.get("location", ""),
-                        "description":   ev.get("description", ""),
-                        "status":        ev.get("status", "confirmed"),
+                        "id": ev.get("id",""), "title": ev.get("summary","(Không có tiêu đề)"),
+                        "date_str": date_str, "time_str": time_str, "all_day": all_day,
+                        "color": bg_color, "calendar_name": cal_name,
+                        "location": ev.get("location",""), "description": ev.get("description",""),
                     })
             except Exception:
                 continue
-        # Sắp xếp: all-day trước, sau đó theo giờ
         all_events.sort(key=lambda e: (e["date_str"], not e["all_day"], e["time_str"]))
         return all_events
-    except Exception as e:
+    except Exception:
         return []
 
-def them_task_vao_gcal(task: dict) -> str | None:
-    """Tạo sự kiện Google Calendar từ MTL task. Trả về event ID hoặc None."""
+
+def them_task_vao_gcal(task):
     svc = _gcal_service()
     if not svc:
         return None
     try:
         date_str = task.get("date", datetime.now().strftime("%Y-%m-%d"))
         event = {
-            "summary":     task["title"],
-            "description": task.get("desc", "") + (
-                f"\n\nPhụ trách: {ten_nv(task.get('assignee',''))}"
-                f"\nƯu tiên: {'Cao' if task.get('priority')=='high' else 'Trung bình' if task.get('priority')=='medium' else 'Thấp'}"
-                f"\n[MTL Task ID: {task.get('id','')}]"
-            ),
-            "start": {"date": date_str},
-            "end":   {"date": date_str},
+            "summary": task["title"],
+            "description": task.get("desc", "") + f"\n[MTL Task ID: {task.get('id','')}]",
+            "start": {"date": date_str}, "end": {"date": date_str},
             "colorId": "9" if task.get("priority") == "high" else "1",
         }
         result = svc.events().insert(calendarId="primary", body=event).execute()
@@ -2040,69 +1694,30 @@ def them_task_vao_gcal(task: dict) -> str | None:
         return None
 
 
-# ══════════════════════════════════════════════════════════════
-#  TAB 6 — QUẢN LÝ CÔNG VIỆC (Task Management)
-#  • Danh sách task (CRUD) + đánh dấu hoàn thành
-#  • Lịch công việc theo tuần
-#  • Hiệu suất nhân viên: tuần / tháng / năm  (chỉ admin)
-#  • Báo cáo tuần tự động — gửi Gmail Thứ 5 20:00
-# ══════════════════════════════════════════════════════════════
-
-# ── 5 Task cứng bắt buộc mỗi tuần ──────────────────────────────
 MANDATORY_TASKS = [
-    {
-        "idx": 0,
-        "title": "Power of One: Gặp 1 cộng tác viên",
-        "icon": "🤝",
-        "desc": "Gặp gỡ, kết nối với ít nhất 1 cộng tác viên trong tuần.",
-        "priority": "high",
-    },
-    {
-        "idx": 1,
-        "title": "Gặp 1 khách hàng cũ",
-        "icon": "👤",
-        "desc": "Thăm hỏi, chăm sóc hoặc trao đổi công việc với 1 khách hàng đã hợp tác.",
-        "priority": "high",
-    },
-    {
-        "idx": 2,
-        "title": "Gặp 1 khách hàng mới",
-        "icon": "🌟",
-        "desc": "Tiếp cận, tư vấn hoặc gặp mặt 1 khách hàng tiềm năng mới.",
-        "priority": "high",
-    },
-    {
-        "idx": 3,
-        "title": "Ký 01 hợp đồng / Thực hiện 1 dự án mới",
-        "icon": "✍️",
-        "desc": "Ký kết hợp đồng dịch vụ pháp lý hoặc khởi động 1 dự án mới trong tuần.",
-        "priority": "high",
-    },
-    {
-        "idx": 4,
-        "title": "Học tập 01 giờ",
-        "icon": "📚",
-        "desc": "Dành ít nhất 1 giờ học tập: nghiên cứu luật, đọc tài liệu chuyên môn, tham gia webinar...",
-        "priority": "medium",
-    },
+    {"idx":0,"title":"Power of One: Gặp 1 cộng tác viên","icon":"🤝",
+     "desc":"Gặp gỡ, kết nối với ít nhất 1 cộng tác viên trong tuần.","priority":"high"},
+    {"idx":1,"title":"Gặp 1 khách hàng cũ","icon":"👤",
+     "desc":"Thăm hỏi, chăm sóc 1 khách hàng cũ.","priority":"high"},
+    {"idx":2,"title":"Gặp 1 khách hàng mới","icon":"🌟",
+     "desc":"Tiếp cận 1 khách hàng tiềm năng mới.","priority":"high"},
+    {"idx":3,"title":"Ký 01 hợp đồng / Thực hiện 1 dự án mới","icon":"✍️",
+     "desc":"Ký hợp đồng hoặc khởi động dự án mới.","priority":"high"},
+    {"idx":4,"title":"Học tập 01 giờ","icon":"📚",
+     "desc":"Học tập, nghiên cứu chuyên môn.","priority":"medium"},
 ]
 
-# ── Session-state khởi tạo (prefix mtl_task_ tránh xung đột) ──
 _task_defaults = {
-    "mtl_tasks":          [],   # Danh sách task thường
-    "mtl_task_edit_id":   None, # ID task đang sửa
-    "mtl_rpt_text":       "",   # Nội dung báo cáo AI mới nhất
-    "mtl_last_sent_week": "",   # Tuần đã gửi báo cáo (vd: "2026-W17")
-    "mtl_perf_period":    "week",
-    "mtl_mandatory_done": {},   # {"{week}_{user_id}_{idx}": True/False}
-    "mtl_mandatory_notes":{},   # {"{week}_{user_id}_{idx}": "ghi chú"}
+    "mtl_tasks": [], "mtl_task_edit_id": None, "mtl_rpt_text": "",
+    "mtl_last_sent_week": "", "mtl_perf_period": "week",
+    "mtl_mandatory_done": {}, "mtl_mandatory_notes": {},
 }
 for _k, _v in _task_defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
+
 def mkey(week, user_id, idx):
-    """Khóa lưu trạng thái task cứng."""
     return f"{week}__{user_id}__{idx}"
 
 def is_mandatory_done(week, user_id, idx):
@@ -2117,12 +1732,10 @@ def get_mandatory_note(week, user_id, idx):
 def set_mandatory_note(week, user_id, idx, note):
     st.session_state.mtl_mandatory_notes[mkey(week, user_id, idx)] = note
 
-# ─── Danh sách thành viên lấy từ TAI_KHOAN ───────────────────
+
 def lay_thanh_vien():
-    return [
-        {"id": tk, "ho_ten": info["ho_ten"], "chuc_vu": info["chuc_vu"]}
-        for tk, info in TAI_KHOAN.items()
-    ]
+    return [{"id": tk, "ho_ten": info["ho_ten"], "chuc_vu": info["chuc_vu"]}
+            for tk, info in TAI_KHOAN.items()]
 
 THANH_VIEN = lay_thanh_vien()
 
@@ -2132,19 +1745,19 @@ def ten_nv(user_id):
             return m["ho_ten"]
     return "Chưa phân công"
 
-# ─── Helpers task ─────────────────────────────────────────────
+
 def task_gen_id():
     return f"T{datetime.now().strftime('%Y%m%d%H%M%S%f')[-10:]}"
 
+
 def tasks_of_week(week_str):
-    """Lọc task theo tuần ISO (vd: '2026-W17')."""
     try:
         yr, wn = week_str.split("-W")
         yr, wn = int(yr), int(wn)
-        jan4   = datetime(yr, 1, 4)
-        day1   = jan4 - timedelta(days=jan4.weekday())
-        ws     = day1 + timedelta(weeks=wn - 1)
-        we     = ws + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        jan4 = datetime(yr, 1, 4)
+        day1 = jan4 - timedelta(days=jan4.weekday())
+        ws = day1 + timedelta(weeks=wn - 1)
+        we = ws + timedelta(days=6, hours=23, minutes=59, seconds=59)
         result = []
         for t in st.session_state.mtl_tasks:
             try:
@@ -2157,6 +1770,7 @@ def tasks_of_week(week_str):
     except Exception:
         return st.session_state.mtl_tasks
 
+
 def tasks_of_month(year, month):
     result = []
     for t in st.session_state.mtl_tasks:
@@ -2167,6 +1781,7 @@ def tasks_of_month(year, month):
         except Exception:
             pass
     return result
+
 
 def tasks_of_year(year):
     result = []
@@ -2179,93 +1794,82 @@ def tasks_of_year(year):
             pass
     return result
 
-def cur_week_str():
-    n = datetime.now()
-    return n.strftime("%G-W%V")
 
-# ─── Tạo báo cáo tuần bằng Claude ────────────────────────────
+def cur_week_str():
+    return datetime.now().strftime("%G-W%V")
+
+
 def tao_bao_cao_tuan(week_str, week_tasks):
     tv_data = []
     for m in THANH_VIEN:
-        mt   = [t for t in week_tasks if t.get("assignee") == m["id"]]
+        mt = [t for t in week_tasks if t.get("assignee") == m["id"]]
         done = sum(1 for t in mt if t.get("done"))
-        # Task cứng
-        mand_done = sum(1 for mt2 in MANDATORY_TASKS
-                        if is_mandatory_done(week_str, m["id"], mt2["idx"]))
+        mand_done = sum(1 for mt2 in MANDATORY_TASKS if is_mandatory_done(week_str, m["id"], mt2["idx"]))
         mand_notes = []
         for mt2 in MANDATORY_TASKS:
             note = get_mandatory_note(week_str, m["id"], mt2["idx"])
             tick = "✓" if is_mandatory_done(week_str, m["id"], mt2["idx"]) else "○"
             mand_notes.append(f"  [{tick}] {mt2['title']}" + (f" → {note}" if note else ""))
-        tv_data.append(
-            f"• {m['ho_ten']}: {done}/{len(mt)} task thường | "
-            f"Task bắt buộc: {mand_done}/{len(MANDATORY_TASKS)}\n"
-            + "\n".join(mand_notes)
-        )
+        tv_data.append(f"• {m['ho_ten']}: {done}/{len(mt)} task | Bắt buộc: {mand_done}/{len(MANDATORY_TASKS)}\n" + "\n".join(mand_notes))
 
     task_lines = "\n".join(
-        f"- [{'✓' if t.get('done') else '○'}] {t['title']} "
-        f"| {ten_nv(t.get('assignee',''))} "
-        f"| {'Cao' if t.get('priority')=='high' else 'TB' if t.get('priority')=='medium' else 'Thấp'} "
-        f"| {t.get('date','—')}"
-        + (f" | Kết quả: {t['notes']}" if t.get('notes') and t.get('done') else "")
+        f"- [{'✓' if t.get('done') else '○'}] {t['title']} | {ten_nv(t.get('assignee',''))} | {t.get('date','—')}"
         for t in week_tasks
-    ) or "Không có task nào trong tuần này."
+    ) or "Không có task nào."
 
-    total  = len(week_tasks)
+    total = len(week_tasks)
     done_n = sum(1 for t in week_tasks if t.get("done"))
 
     prompt = f"""Viết BÁO CÁO CÔNG VIỆC TUẦN {week_str} của {TEN_CONG_TY} gửi Ban Lãnh Đạo.
-
-THỐNG KÊ TASK THƯỜNG: {total} task | {done_n} hoàn thành | {total - done_n} chưa xong
-
-TIẾN ĐỘ 5 MỤC TIÊU BẮT BUỘC (Power of One) VÀ TASK THƯỜNG THEO TỪNG LUẬT SƯ:
-{chr(10).join(tv_data) or 'Chưa có dữ liệu.'}
-
-DANH SÁCH TASK THƯỜNG:
+THỐNG KÊ: {total} task | {done_n} hoàn thành | {total - done_n} chưa xong
+TIẾN ĐỘ 5 MỤC TIÊU BẮT BUỘC (Power of One):
+{chr(10).join(tv_data) or 'Chưa có'}
+DANH SÁCH TASK:
 {task_lines}
-
-Yêu cầu: Viết tiếng Việt, văn phong pháp lý chuyên nghiệp, gồm:
+Yêu cầu: Tiếng Việt, văn phong pháp lý chuyên nghiệp, gồm:
 1. TỔNG KẾT THÀNH TÍCH TUẦN
-2. TIẾN ĐỘ 5 MỤC TIÊU "POWER OF ONE" (nêu rõ ai hoàn thành, ai chưa)
+2. TIẾN ĐỘ 5 MỤC TIÊU "POWER OF ONE"
 3. ĐÁNH GIÁ HIỆU SUẤT TỪNG LUẬT SƯ
-4. CÔNG VIỆC TỒN ĐỌNG & GIẢI PHÁP
-5. KẾ HOẠCH CÔNG VIỆC TUẦN TỚI
-Ngắn gọn, súc tích, phù hợp trình lãnh đạo."""
+4. CÔNG VIỆC TỒN ĐỌNG
+5. KẾ HOẠCH TUẦN TỚI"""
+    return goi_claude([{"role":"user","content":prompt}],
+        f"Bạn là trợ lý hành chính tại {TEN_CONG_TY}. Viết báo cáo chuyên nghiệp.")
 
-    return goi_claude(
-        [{"role": "user", "content": prompt}],
-        f"Bạn là trợ lý hành chính pháp lý tại {TEN_CONG_TY}. "
-        f"Viết báo cáo chuyên nghiệp, có cấu trúc rõ ràng.",
-    )
 
-# ─── Gửi báo cáo qua Gmail ────────────────────────────────────
 def gui_bao_cao_gmail(to_list, cc_list, subject, body):
-    """Gửi báo cáo đến nhiều người nhận TO + CC."""
+    """Gửi báo cáo qua Gmail — fix encoding tiếng Việt."""
     svc = _gmail_service()
     if not svc:
         return False, "Chưa kết nối Gmail"
+    to_list = [e.strip() for e in (to_list or []) if e and "@" in e]
+    cc_list = [e.strip() for e in (cc_list or []) if e and "@" in e]
+    if not to_list:
+        return False, "Danh sách email TO rỗng"
+    if not (body or "").strip():
+        return False, "Nội dung báo cáo rỗng"
     try:
-        from email.mime.text import MIMEText
-        msg = MIMEText(body, "plain", "utf-8")
-        sender = st.session_state.get(f"gemail_{nd['ten_tk']}", "me")
+        from email.message import EmailMessage
+        sender = st.session_state.get(f"gemail_{nd['ten_tk']}", "") or "me"
+        msg = EmailMessage()
+        msg.set_content(body, charset="utf-8")
+        msg["Subject"] = subject or "(Không có tiêu đề)"
         msg["From"]    = sender
         msg["To"]      = ", ".join(to_list)
         if cc_list:
             msg["Cc"]  = ", ".join(cc_list)
-        msg["Subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId="me", body={"raw": raw}).execute()
         return True, "OK"
     except Exception as e:
-        return False, str(e)
+        err = str(e)
+        if "401" in err or "unauthorized" in err.lower():
+            return False, "Token Gmail hết hạn — đăng nhập lại."
+        return False, err
 
-# ─── Biểu đồ cột HTML ─────────────────────────────────────────
+
 def ve_bieu_do(labels, done_vals, todo_vals, title=""):
-    """Render biểu đồ cột chồng (done=xanh, todo=vàng) bằng HTML thuần."""
     max_v = max(max(done_vals + todo_vals, default=1), 1)
-    bar_h = 160  # px chiều cao tối đa
-
+    bar_h = 160
     bars_html = ""
     for i, lbl in enumerate(labels):
         d = done_vals[i] if i < len(done_vals) else 0
@@ -2273,83 +1877,38 @@ def ve_bieu_do(labels, done_vals, todo_vals, title=""):
         ph_d = int((d / max_v) * bar_h)
         ph_u = int((u / max_v) * bar_h)
         val_lbl = f"{d}/{d+u}" if (d + u) > 0 else ""
-        bars_html += f"""
-<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;gap:2px;cursor:default;"
-     title="{lbl}: {d} hoàn thành / {d+u} tổng">
-  <div style="font-size:10px;font-weight:600;color:#555;">{val_lbl}</div>
-  <div style="display:flex;flex-direction:column;justify-content:flex-end;height:{bar_h}px;width:100%;gap:1px;">
-    <div style="background:#0f6e56;border-radius:3px 3px 0 0;height:{ph_d}px;width:100%;"></div>
-    <div style="background:#C9A96E;border-radius:3px 3px 0 0;height:{ph_u}px;width:100%;"></div>
-  </div>
-  <div style="font-size:10px;color:#666;text-align:center;white-space:nowrap;
-              overflow:hidden;text-overflow:ellipsis;width:100%;">{lbl}</div>
-</div>"""
-
-    legend = (
-        "<span style='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;margin-right:12px;'>"
-        "<span style='width:10px;height:10px;border-radius:2px;background:#0f6e56;display:inline-block;'></span>Hoàn thành</span>"
-        "<span style='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;'>"
-        "<span style='width:10px;height:10px;border-radius:2px;background:#C9A96E;display:inline-block;'></span>Chưa xong</span>"
-    )
-
-    return f"""
-<div style="margin-bottom:6px;font-size:12px;font-weight:600;color:{MTL_NAVY};">{title}</div>
+        bars_html += f"""<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;gap:2px;">
+<div style="font-size:10px;font-weight:600;color:#555;">{val_lbl}</div>
+<div style="display:flex;flex-direction:column;justify-content:flex-end;height:{bar_h}px;width:100%;gap:1px;">
+<div style="background:#0f6e56;border-radius:3px 3px 0 0;height:{ph_d}px;width:100%;"></div>
+<div style="background:#C9A96E;border-radius:3px 3px 0 0;height:{ph_u}px;width:100%;"></div>
+</div><div style="font-size:10px;color:#666;text-align:center;">{lbl}</div></div>"""
+    legend = ("<span style='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;margin-right:12px;'><span style='width:10px;height:10px;border-radius:2px;background:#0f6e56;display:inline-block;'></span>Hoàn thành</span><span style='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#555;'><span style='width:10px;height:10px;border-radius:2px;background:#C9A96E;display:inline-block;'></span>Chưa xong</span>")
+    return f"""<div style="margin-bottom:6px;font-size:12px;font-weight:600;color:{MTL_NAVY};">{title}</div>
 <div style="margin-bottom:8px;">{legend}</div>
-<div style="display:flex;gap:4px;align-items:flex-end;height:{bar_h+40}px;padding:0 4px;">
-  {bars_html}
-</div>"""
+<div style="display:flex;gap:4px;align-items:flex-end;height:{bar_h+40}px;padding:0 4px;">{bars_html}</div>"""
 
 
-# ══════════════════════════════════════════════════════════════
-#  RENDER TAB 6
-# ══════════════════════════════════════════════════════════════
 with tab6:
     is_admin = (nd.get("vai_tro") == "quan_tri")
 
-    # ── Banner ──
     st.markdown(f"""
-<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);
-border-radius:10px;padding:14px 20px;margin-bottom:18px;
-border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content:space-between;">
-  <div>
-    <span style="color:white;font-size:1.05rem;font-weight:700;">📌 Quản lý Công việc</span>
-    <span style="color:{MTL_GOLD2};font-size:0.8rem;margin-left:12px;">
-      Task · Lịch · Hiệu suất · Báo cáo tuần tự động
-    </span>
-  </div>
-  <div style="background:rgba(168,135,74,0.2);border:1px solid {MTL_GOLD}55;
-  border-radius:8px;padding:5px 12px;font-size:0.78rem;color:{MTL_GOLD2};">
-    📅 Gửi tự động: Thứ 5 · 20:00
-  </div>
+<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);border-radius:10px;padding:14px 20px;margin-bottom:18px;border-left:4px solid {MTL_GOLD};">
+  <span style="color:white;font-size:1.05rem;font-weight:700;">📌 Quản lý Công việc</span>
+  <span style="color:{MTL_GOLD2};font-size:0.8rem;margin-left:12px;">Task · Lịch · Hiệu suất · Báo cáo tuần tự động</span>
 </div>""", unsafe_allow_html=True)
 
-    # ── Sub-tabs ──
     if is_admin:
         stab_labels = ["📋 Task", "📅 Lịch tuần", "📊 Hiệu suất", "📤 Báo cáo & Gửi"]
     else:
         stab_labels = ["📋 Task của tôi", "📅 Lịch tuần", "📤 Báo cáo & Gửi"]
-
     stabs = st.tabs(stab_labels)
 
-    # ════════════════════════════════════════════
-    #  STAB 0 — DANH SÁCH TASK
-    # ════════════════════════════════════════════
+    # STAB 0 — TASK
     with stabs[0]:
         cur_wk_now = cur_week_str()
+        st.markdown(f"<div style='background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});border-radius:10px;padding:12px 18px;margin-bottom:14px;border-left:4px solid {MTL_GOLD};'><span style='color:white;font-weight:700;font-size:0.95rem;'>🎯 Task bắt buộc — Power of One</span><span style='color:{MTL_GOLD2};font-size:0.78rem;margin-left:10px;'>Tuần {cur_wk_now}</span></div>", unsafe_allow_html=True)
 
-        # ── PHẦN 1: 5 TASK CỨNG BẮT BUỘC ───────────────────────
-        st.markdown(f"""
-<div style="background:linear-gradient(135deg,{MTL_NAVY2} 0%,{MTL_NAVY} 100%);
-border-radius:10px;padding:12px 18px;margin-bottom:14px;
-border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
-  <span style="font-size:1.1rem;">🎯</span>
-  <div>
-    <span style="color:white;font-weight:700;font-size:0.95rem;">Task bắt buộc tuần — Power of One</span>
-    <span style="color:{MTL_GOLD2};font-size:0.78rem;margin-left:10px;">5 mục tiêu cốt lõi · Tuần {cur_wk_now}</span>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-        # Xác định user nào đang xem (admin xem tất cả, ls xem mình)
         if is_admin:
             mandatory_users = THANH_VIEN
         else:
@@ -2357,287 +1916,151 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
 
         for m_user in mandatory_users:
             uid = m_user["id"]
-            done_count = sum(1 for mt in MANDATORY_TASKS
-                             if is_mandatory_done(cur_wk_now, uid, mt["idx"]))
+            done_count = sum(1 for mt in MANDATORY_TASKS if is_mandatory_done(cur_wk_now, uid, mt["idx"]))
 
             if is_admin:
                 pct = int(done_count / len(MANDATORY_TASKS) * 100)
                 bar_c = "#0f6e56" if pct == 100 else (MTL_GOLD if pct >= 60 else "#e24b4a")
-                st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:10px;margin:6px 0 4px;'>"
-                    f"<div style='width:26px;height:26px;border-radius:50%;background:{MTL_NAVY};"
-                    f"color:{MTL_GOLD2};display:flex;align-items:center;justify-content:center;"
-                    f"font-size:11px;font-weight:700;flex-shrink:0;'>{m_user['ho_ten'][0]}</div>"
-                    f"<span style='font-size:0.83rem;font-weight:600;color:{MTL_NAVY};'>"
-                    f"{m_user['ho_ten']}</span>"
-                    f"<div style='flex:1;background:#e0e8f5;border-radius:4px;height:5px;overflow:hidden;'>"
-                    f"<div style='background:{bar_c};width:{pct}%;height:5px;'></div></div>"
-                    f"<span style='font-size:0.75rem;color:#666;min-width:36px;text-align:right;'>"
-                    f"{done_count}/{len(MANDATORY_TASKS)}</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"<div style='display:flex;align-items:center;gap:10px;margin:6px 0 4px;'><div style='width:26px;height:26px;border-radius:50%;background:{MTL_NAVY};color:{MTL_GOLD2};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;'>{m_user['ho_ten'][0]}</div><span style='font-size:0.83rem;font-weight:600;color:{MTL_NAVY};'>{m_user['ho_ten']}</span><div style='flex:1;background:#e0e8f5;border-radius:4px;height:5px;overflow:hidden;'><div style='background:{bar_c};width:{pct}%;height:5px;'></div></div><span style='font-size:0.75rem;color:#666;'>{done_count}/{len(MANDATORY_TASKS)}</span></div>", unsafe_allow_html=True)
 
             for mt in MANDATORY_TASKS:
                 k_done = f"mand_cb_{uid}_{mt['idx']}_{cur_wk_now}"
                 k_note = f"mand_note_{uid}_{mt['idx']}_{cur_wk_now}"
-                k_exp  = f"mand_exp_{uid}_{mt['idx']}_{cur_wk_now}"
                 done   = is_mandatory_done(cur_wk_now, uid, mt["idx"])
                 note   = get_mandatory_note(cur_wk_now, uid, mt["idx"])
-
                 pri_color = MTL_NAVY if mt["priority"] == "high" else MTL_GOLD
-                done_style = "opacity:0.55;" if done else ""
-                strike     = "text-decoration:line-through;color:#999;" if done else f"color:{MTL_NAVY};"
-
-                # Chỉ cho phép tick nếu đúng user (hoặc admin có thể tick mọi người)
+                strike = "text-decoration:line-through;color:#999;" if done else f"color:{MTL_NAVY};"
                 can_tick = is_admin or (uid == nd["ten_tk"])
 
                 row1, row2, row3 = st.columns([0.5, 7.5, 2])
                 with row1:
                     if can_tick:
-                        if st.button(
-                            "☑" if done else "☐",
-                            key=k_done,
-                            help="Đánh dấu hoàn thành",
-                        ):
+                        if st.button("☑" if done else "☐", key=k_done):
                             set_mandatory_done(cur_wk_now, uid, mt["idx"], not done)
+                            luu_phien_cua_user(nd["ten_tk"])
                             st.rerun()
                     else:
-                        st.markdown(
-                            f"<div style='padding:4px;color:{'#0f6e56' if done else '#ccc'};font-size:1rem;'>{'☑' if done else '☐'}</div>",
-                            unsafe_allow_html=True,
-                        )
-
+                        st.markdown(f"<div style='padding:4px;color:{'#0f6e56' if done else '#ccc'};font-size:1rem;'>{'☑' if done else '☐'}</div>", unsafe_allow_html=True)
                 with row2:
-                    st.markdown(
-                        f"<div style='{done_style}display:flex;align-items:center;gap:8px;padding:3px 0;'>"
-                        f"<span style='font-size:1rem;'>{mt['icon']}</span>"
-                        f"<div>"
-                        f"<span style='{strike}font-size:0.88rem;font-weight:600;'>{mt['title']}</span>"
-                        f"<span style='background:{pri_color}22;color:{pri_color};font-size:10px;"
-                        f"border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:600;'>BẮT BUỘC</span>"
-                        + (f"<span style='background:#eaf3de;color:#27500a;font-size:10px;"
-                           f"border-radius:4px;padding:1px 6px;margin-left:4px;'>✓ Xong</span>" if done else "")
-                        + f"<div style='font-size:0.75rem;color:#888;margin-top:1px;'>{mt['desc']}</div>"
-                        + (f"<div style='font-size:0.76rem;color:#555;font-style:italic;margin-top:2px;'>"
-                           f"📝 {note}</div>" if note else "")
-                        + f"</div></div>",
-                        unsafe_allow_html=True,
-                    )
-
+                    st.markdown(f"<div style='display:flex;align-items:center;gap:8px;padding:3px 0;'><span style='font-size:1rem;'>{mt['icon']}</span><div><span style='{strike}font-size:0.88rem;font-weight:600;'>{mt['title']}</span><span style='background:{pri_color}22;color:{pri_color};font-size:10px;border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:600;'>BẮT BUỘC</span>" + (f"<span style='background:#eaf3de;color:#27500a;font-size:10px;border-radius:4px;padding:1px 6px;margin-left:4px;'>✓ Xong</span>" if done else "") + f"<div style='font-size:0.75rem;color:#888;margin-top:1px;'>{mt['desc']}</div>" + (f"<div style='font-size:0.76rem;color:#555;font-style:italic;margin-top:2px;'>📝 {note}</div>" if note else "") + "</div></div>", unsafe_allow_html=True)
                 with row3:
                     if can_tick:
                         with st.expander("📝 Ghi chú", expanded=False):
-                            new_note = st.text_input(
-                                "Kết quả",
-                                value=note,
-                                key=k_note,
-                                placeholder="Ghi chú kết quả thực hiện...",
-                                label_visibility="collapsed",
-                            )
+                            new_note = st.text_input("Kết quả", value=note, key=k_note, label_visibility="collapsed")
                             if new_note != note:
                                 set_mandatory_note(cur_wk_now, uid, mt["idx"], new_note)
+                                luu_phien_cua_user(nd["ten_tk"])
                                 st.rerun()
+                st.markdown("<div style='height:1px;background:#f0f3fa;margin:2px 0;'></div>", unsafe_allow_html=True)
 
-                st.markdown(
-                    "<div style='height:1px;background:#f0f3fa;margin:2px 0;'></div>",
-                    unsafe_allow_html=True,
-                )
+        st.markdown(f"<div style='font-weight:700;font-size:0.95rem;color:{MTL_NAVY};margin:16px 0 10px;border-left:3px solid {MTL_GOLD};padding-left:10px;'>📋 Task công việc thường</div>", unsafe_allow_html=True)
 
-            if is_admin and len(mandatory_users) > 1:
-                st.markdown("<br>", unsafe_allow_html=True)
-
-        # ── Tổng tiến độ 5 task bắt buộc của mình ──
-        my_done_count = sum(1 for mt in MANDATORY_TASKS
-                            if is_mandatory_done(cur_wk_now, nd["ten_tk"], mt["idx"]))
-        pct_my = int(my_done_count / len(MANDATORY_TASKS) * 100)
-        bar_color_my = "#0f6e56" if pct_my == 100 else (MTL_GOLD if pct_my >= 60 else "#e24b4a")
-        status_lbl = "🎉 Hoàn thành xuất sắc!" if pct_my == 100 else f"Còn {len(MANDATORY_TASKS)-my_done_count} mục chưa xong"
-
-        st.markdown(
-            f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;border-radius:8px;"
-            f"padding:10px 14px;margin:8px 0 16px;display:flex;align-items:center;gap:14px;'>"
-            f"<div style='flex:1;'>"
-            f"<div style='font-size:0.8rem;color:#555;margin-bottom:5px;font-weight:600;'>"
-            f"Tiến độ task bắt buộc tuần của bạn: <span style='color:{bar_color_my};'>{status_lbl}</span></div>"
-            f"<div style='background:#e0e8f5;border-radius:4px;height:8px;overflow:hidden;'>"
-            f"<div style='background:{bar_color_my};width:{pct_my}%;height:8px;"
-            f"border-radius:4px;transition:width .3s;'></div></div></div>"
-            f"<div style='font-size:1.4rem;font-weight:700;color:{bar_color_my};min-width:40px;text-align:right;'>"
-            f"{pct_my}%</div></div>",
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f"<div style='font-weight:700;font-size:0.95rem;color:{MTL_NAVY};"
-            f"margin-bottom:10px;border-left:3px solid {MTL_GOLD};padding-left:10px;'>"
-            f"📋 Task công việc thường</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Lọc task theo role
         all_tasks = st.session_state.mtl_tasks
         if is_admin:
             view_tasks = all_tasks
         else:
             view_tasks = [t for t in all_tasks if t.get("assignee") == nd["ten_tk"]]
 
-        # ── Thanh thống kê ──
         total_t = len(view_tasks)
         done_t  = sum(1 for t in view_tasks if t.get("done"))
-        todo_t  = total_t - done_t
-        hi_t    = sum(1 for t in view_tasks if t.get("priority") == "high" and not t.get("done"))
-
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Tổng task", total_t)
         c2.metric("Đã hoàn thành", done_t, delta=f"{int(done_t/total_t*100) if total_t else 0}%")
-        c3.metric("Chưa xong", todo_t)
-        c4.metric("🔴 Ưu tiên cao", hi_t)
+        c3.metric("Chưa xong", total_t - done_t)
+        c4.metric("🔴 Ưu tiên cao", sum(1 for t in view_tasks if t.get("priority")=="high" and not t.get("done")))
 
         st.markdown("---")
-
-        # ── Bộ lọc ──
         fc1, fc2, fc3, fc4 = st.columns([2, 1.5, 1.5, 1])
         with fc1:
-            search_q = st.text_input("🔍 Tìm task", placeholder="Tên task...", label_visibility="collapsed", key="task_search")
+            search_q = st.text_input("🔍 Tìm task", label_visibility="collapsed", key="task_search")
         with fc2:
             if is_admin:
-                nv_opts = ["Tất cả"] + [m["ho_ten"] for m in THANH_VIEN]
-                filter_nv = st.selectbox("Nhân viên", nv_opts, label_visibility="collapsed", key="task_fnv")
+                filter_nv = st.selectbox("NV", ["Tất cả"] + [m["ho_ten"] for m in THANH_VIEN], label_visibility="collapsed", key="task_fnv")
             else:
                 filter_nv = "Tất cả"
         with fc3:
-            filter_status = st.selectbox("Trạng thái", ["Tất cả", "Chưa xong", "Đã xong"],
-                                         label_visibility="collapsed", key="task_fst")
+            filter_status = st.selectbox("TT", ["Tất cả", "Chưa xong", "Đã xong"], label_visibility="collapsed", key="task_fst")
         with fc4:
             if st.button("➕ Thêm task", type="primary", use_container_width=True, key="task_add_btn"):
                 st.session_state.mtl_task_edit_id = "__new__"
                 st.rerun()
 
-        # ── Form thêm / sửa task ──
         edit_id = st.session_state.mtl_task_edit_id
         if edit_id:
             editing_task = None
             if edit_id != "__new__":
                 editing_task = next((t for t in all_tasks if t["id"] == edit_id), None)
-
-            with st.expander(
-                "✏️ Sửa task" if editing_task else "➕ Thêm task mới",
-                expanded=True,
-            ):
+            with st.expander("✏️ Sửa task" if editing_task else "➕ Thêm task mới", expanded=True):
                 with st.form("task_form", clear_on_submit=False):
                     ef1, ef2 = st.columns(2)
                     with ef1:
-                        tf_title = st.text_input("Tiêu đề *",
-                                                  value=editing_task["title"] if editing_task else "",
-                                                  placeholder="Nhập tiêu đề task...")
-                        tf_date  = st.date_input("Ngày thực hiện",
-                                                  value=datetime.strptime(editing_task["date"], "%Y-%m-%d").date()
-                                                  if editing_task and editing_task.get("date") else datetime.now().date())
-                        tf_priority = st.selectbox("Độ ưu tiên",
-                                                    ["high", "medium", "low"],
-                                                    format_func=lambda x: {"high":"🔴 Cao","medium":"🟡 Trung bình","low":"🟢 Thấp"}[x],
-                                                    index={"high":0,"medium":1,"low":2}.get(
-                                                        editing_task.get("priority","medium") if editing_task else "medium", 1))
+                        tf_title = st.text_input("Tiêu đề *", value=editing_task["title"] if editing_task else "")
+                        tf_date = st.date_input("Ngày", value=datetime.strptime(editing_task["date"], "%Y-%m-%d").date() if editing_task and editing_task.get("date") else datetime.now().date())
+                        tf_priority = st.selectbox("Độ ưu tiên", ["high","medium","low"],
+                            format_func=lambda x: {"high":"🔴 Cao","medium":"🟡 TB","low":"🟢 Thấp"}[x],
+                            index={"high":0,"medium":1,"low":2}.get(editing_task.get("priority","medium") if editing_task else "medium", 1))
                     with ef2:
-                        nv_ids   = [m["id"] for m in THANH_VIEN]
-                        nv_names = [m["ho_ten"] for m in THANH_VIEN]
-                        cur_nv   = editing_task.get("assignee", nd["ten_tk"]) if editing_task else nd["ten_tk"]
-                        nv_idx   = nv_ids.index(cur_nv) if cur_nv in nv_ids else 0
-                        tf_assignee = st.selectbox("Người thực hiện", nv_ids,
-                                                    format_func=lambda x: ten_nv(x),
-                                                    index=nv_idx)
-                        tf_status   = st.selectbox("Trạng thái",
-                                                    ["todo", "done"],
-                                                    format_func=lambda x: "✅ Đã hoàn thành" if x=="done" else "⏳ Chưa xong",
-                                                    index=1 if (editing_task and editing_task.get("done")) else 0)
-                        tf_add_cal  = st.checkbox("📆 Thêm vào Google Calendar",
-                                                   value=True if not editing_task else False)
-                    tf_desc  = st.text_area("Mô tả", value=editing_task.get("desc","") if editing_task else "",
-                                             placeholder="Mô tả chi tiết công việc...", height=70)
-                    tf_notes = st.text_area("Ghi chú / Kết quả",
-                                             value=editing_task.get("notes","") if editing_task else "",
-                                             placeholder="Ghi chú sau khi hoàn thành...", height=60)
-
+                        nv_ids = [m["id"] for m in THANH_VIEN]
+                        cur_nv = editing_task.get("assignee", nd["ten_tk"]) if editing_task else nd["ten_tk"]
+                        tf_assignee = st.selectbox("Người thực hiện", nv_ids, format_func=lambda x: ten_nv(x),
+                            index=nv_ids.index(cur_nv) if cur_nv in nv_ids else 0)
+                        tf_status = st.selectbox("Trạng thái", ["todo","done"],
+                            format_func=lambda x: "✅ Đã xong" if x=="done" else "⏳ Chưa xong",
+                            index=1 if (editing_task and editing_task.get("done")) else 0)
+                        tf_add_cal = st.checkbox("📆 Thêm vào Google Calendar", value=True if not editing_task else False)
+                    tf_desc = st.text_area("Mô tả", value=editing_task.get("desc","") if editing_task else "", height=70)
+                    tf_notes = st.text_area("Ghi chú/Kết quả", value=editing_task.get("notes","") if editing_task else "", height=60)
                     sb1, sb2, sb3 = st.columns([1,1,3])
                     with sb1:
                         saved = st.form_submit_button("💾 Lưu", type="primary", use_container_width=True)
                     with sb2:
                         cancelled = st.form_submit_button("Hủy", use_container_width=True)
-
                     if cancelled:
                         st.session_state.mtl_task_edit_id = None
                         st.rerun()
-
                     if saved:
                         if not tf_title.strip():
-                            st.error("Vui lòng nhập tiêu đề task!")
+                            st.error("Vui lòng nhập tiêu đề!")
                         else:
                             now_str = datetime.now().isoformat()
                             is_done = (tf_status == "done")
                             if editing_task:
                                 for t in st.session_state.mtl_tasks:
                                     if t["id"] == edit_id:
-                                        t.update({
-                                            "title":      tf_title.strip(),
-                                            "desc":       tf_desc.strip(),
-                                            "assignee":   tf_assignee,
-                                            "priority":   tf_priority,
-                                            "date":       tf_date.strftime("%Y-%m-%d"),
-                                            "notes":      tf_notes.strip(),
-                                            "done":       is_done,
-                                            "updated_at": now_str,
-                                        })
+                                        t.update({"title": tf_title.strip(), "desc": tf_desc.strip(),
+                                            "assignee": tf_assignee, "priority": tf_priority,
+                                            "date": tf_date.strftime("%Y-%m-%d"), "notes": tf_notes.strip(),
+                                            "done": is_done, "updated_at": now_str})
                                         if is_done and not t.get("completed_at"):
                                             t["completed_at"] = now_str
                                         break
                             else:
                                 new_task = {
-                                    "id":         task_gen_id(),
-                                    "title":      tf_title.strip(),
-                                    "desc":       tf_desc.strip(),
-                                    "assignee":   tf_assignee,
-                                    "priority":   tf_priority,
-                                    "date":       tf_date.strftime("%Y-%m-%d"),
-                                    "notes":      tf_notes.strip(),
-                                    "done":       is_done,
-                                    "created_at": now_str,
-                                    "updated_at": now_str,
-                                    "completed_at": now_str if is_done else None,
-                                    "cal_added":  False,
+                                    "id": task_gen_id(), "title": tf_title.strip(), "desc": tf_desc.strip(),
+                                    "assignee": tf_assignee, "priority": tf_priority,
+                                    "date": tf_date.strftime("%Y-%m-%d"), "notes": tf_notes.strip(),
+                                    "done": is_done, "created_at": now_str, "updated_at": now_str,
+                                    "completed_at": now_str if is_done else None, "cal_added": False,
                                 }
                                 st.session_state.mtl_tasks.insert(0, new_task)
-
-                                # Thêm Google Calendar nếu được chọn
                                 if tf_add_cal and _gmail_service():
                                     try:
-                                        from googleapiclient.discovery import build as _build
-                                        svc_cal = _build("calendar", "v3",
-                                                         credentials=st.session_state.get(f"gcred_{nd['ten_tk']}"))
-                                        event = {
-                                            "summary":     tf_title.strip(),
-                                            "description": tf_desc.strip(),
+                                        svc_cal = build("calendar", "v3", credentials=st.session_state.get(f"gcred_{nd['ten_tk']}"))
+                                        event = {"summary": tf_title.strip(), "description": tf_desc.strip(),
                                             "start": {"date": tf_date.strftime("%Y-%m-%d")},
-                                            "end":   {"date": tf_date.strftime("%Y-%m-%d")},
-                                            "attendees": [{"email": st.session_state.get(
-                                                f"gemail_{nd['ten_tk']}", "")}],
-                                        }
-                                        svc_cal.events().insert(
-                                            calendarId="primary", body=event
-                                        ).execute()
+                                            "end": {"date": tf_date.strftime("%Y-%m-%d")}}
+                                        svc_cal.events().insert(calendarId="primary", body=event).execute()
                                         new_task["cal_added"] = True
                                     except Exception:
-                                        pass  # Calendar không bắt buộc
-
+                                        pass
                             st.session_state.mtl_task_edit_id = None
+                            luu_phien_cua_user(nd["ten_tk"])
                             st.success("✅ Đã lưu task!")
                             st.rerun()
 
-        # ── Lọc danh sách ──
         filtered = view_tasks
         if search_q.strip():
-            filtered = [t for t in filtered if search_q.lower() in t["title"].lower()
-                        or search_q.lower() in t.get("desc","").lower()]
+            filtered = [t for t in filtered if search_q.lower() in t["title"].lower() or search_q.lower() in t.get("desc","").lower()]
         if filter_nv != "Tất cả":
             nv_id = next((m["id"] for m in THANH_VIEN if m["ho_ten"] == filter_nv), None)
             if nv_id:
@@ -2648,37 +2071,26 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
             filtered = [t for t in filtered if t.get("done")]
 
         st.caption(f"{len(filtered)} task")
+        PRI_MAP = {"high":("🔴","Cao"),"medium":("🟡","TB"),"low":("🟢","Thấp")}
 
-        # ── Hiển thị từng task ──
-        PRI_MAP  = {"high": ("🔴", "Cao"), "medium": ("🟡", "TB"), "low": ("🟢", "Thấp")}
         if not filtered:
-            st.info("Chưa có task nào. Nhấn ➕ Thêm task để bắt đầu.")
+            st.info("Chưa có task nào. Nhấn ➕ để thêm.")
         else:
             for task in filtered:
                 icon_p, lbl_p = PRI_MAP.get(task.get("priority","medium"), ("🟡","TB"))
                 done_icon = "✅" if task.get("done") else "⏳"
                 cal_badge = " 📆" if task.get("cal_added") else ""
-
                 with st.container():
                     col_cb, col_info, col_act = st.columns([0.5, 7, 2.5])
-
                     with col_cb:
-                        # Nút tick hoàn thành
-                        if st.button(
-                            "☑" if task.get("done") else "☐",
-                            key=f"cb_{task['id']}",
-                            help="Đánh dấu hoàn thành / chưa xong",
-                        ):
+                        if st.button("☑" if task.get("done") else "☐", key=f"cb_{task['id']}"):
                             for t in st.session_state.mtl_tasks:
                                 if t["id"] == task["id"]:
                                     t["done"] = not t["done"]
-                                    if t["done"]:
-                                        t["completed_at"] = datetime.now().isoformat()
-                                    else:
-                                        t["completed_at"] = None
+                                    t["completed_at"] = datetime.now().isoformat() if t["done"] else None
                                     break
+                            luu_phien_cua_user(nd["ten_tk"])
                             st.rerun()
-
                     with col_info:
                         title_style = "text-decoration:line-through;color:#999;" if task.get("done") else ""
                         completed_lbl = ""
@@ -2688,41 +2100,21 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
                                 completed_lbl = f" · Xong {dt_c.strftime('%d/%m')}"
                             except Exception:
                                 pass
-
-                        st.markdown(
-                            f"<div style='{title_style}font-weight:600;font-size:0.92rem;'>"
-                            f"{done_icon} {task['title']}</div>"
-                            f"<div style='font-size:0.78rem;color:#666;margin-top:2px;'>"
-                            f"👤 {ten_nv(task.get('assignee',''))} &nbsp;|&nbsp; "
-                            f"{icon_p} {lbl_p} &nbsp;|&nbsp; 📅 {task.get('date','—')}"
-                            f"{cal_badge}{completed_lbl}"
-                            + (f" &nbsp;|&nbsp; <i>\"{task['notes'][:60]}{'…' if len(task.get('notes',''))>60 else ''}\"</i>"
-                               if task.get("notes") and task.get("done") else "")
-                            + "</div>",
-                            unsafe_allow_html=True,
-                        )
-
+                        st.markdown(f"<div style='{title_style}font-weight:600;font-size:0.92rem;'>{done_icon} {task['title']}</div><div style='font-size:0.78rem;color:#666;margin-top:2px;'>👤 {ten_nv(task.get('assignee',''))} | {icon_p} {lbl_p} | 📅 {task.get('date','—')}{cal_badge}{completed_lbl}</div>", unsafe_allow_html=True)
                     with col_act:
                         ba1, ba2 = st.columns(2)
                         with ba1:
-                            if st.button("✏️", key=f"edit_{task['id']}", help="Sửa task"):
+                            if st.button("✏️", key=f"edit_{task['id']}"):
                                 st.session_state.mtl_task_edit_id = task["id"]
                                 st.rerun()
                         with ba2:
-                            if st.button("🗑️", key=f"del_{task['id']}", help="Xóa task"):
-                                st.session_state.mtl_tasks = [
-                                    t for t in st.session_state.mtl_tasks if t["id"] != task["id"]
-                                ]
+                            if st.button("🗑️", key=f"del_{task['id']}"):
+                                st.session_state.mtl_tasks = [t for t in st.session_state.mtl_tasks if t["id"] != task["id"]]
+                                luu_phien_cua_user(nd["ten_tk"])
                                 st.rerun()
+                st.markdown("<div style='height:1px;background:#f0f0f0;margin:2px 0 4px;'></div>", unsafe_allow_html=True)
 
-                st.markdown(
-                    "<div style='height:1px;background:#f0f0f0;margin:2px 0 4px;'></div>",
-                    unsafe_allow_html=True,
-                )
-
-    # ════════════════════════════════════════════
-    #  STAB 1 — LỊCH CÔNG VIỆC (đồng bộ Google Calendar)
-    # ════════════════════════════════════════════
+    # STAB 1 — LỊCH
     with stabs[1]:
         now = datetime.now()
         if "mtl_cal_offset" not in st.session_state:
@@ -2732,316 +2124,93 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
         if "mtl_gcal_synced_week" not in st.session_state:
             st.session_state.mtl_gcal_synced_week = ""
 
-        offset     = st.session_state.mtl_cal_offset
+        offset = st.session_state.mtl_cal_offset
         week_start = now - timedelta(days=now.weekday()) + timedelta(weeks=offset)
         week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_end   = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
-        week_label = (
-            f"{week_start.strftime('%d/%m')} — "
-            f"{week_end.strftime('%d/%m/%Y')}"
-        )
+        week_end = week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
+        week_label = f"{week_start.strftime('%d/%m')} — {week_end.strftime('%d/%m/%Y')}"
         week_key = week_start.strftime("%G-W%V")
 
-        # ── Thanh điều khiển ──
-        ctl1, ctl2, ctl3, ctl4, ctl5 = st.columns([1, 1.2, 1, 1.8, 2])
+        ctl1, ctl2, ctl3, ctl4 = st.columns([1, 1.2, 1, 2])
         with ctl1:
             if st.button("‹ Trước", use_container_width=True, key="cal_prev"):
                 st.session_state.mtl_cal_offset -= 1
-                st.rerun()
-        with ctl3:
-            if st.button("Sau ›", use_container_width=True, key="cal_next"):
-                st.session_state.mtl_cal_offset += 1
                 st.rerun()
         with ctl2:
             if st.button("Hôm nay", use_container_width=True, key="cal_today"):
                 st.session_state.mtl_cal_offset = 0
                 st.rerun()
+        with ctl3:
+            if st.button("Sau ›", use_container_width=True, key="cal_next"):
+                st.session_state.mtl_cal_offset += 1
+                st.rerun()
         with ctl4:
             gcal_svc_ok = _gcal_service() is not None
-            sync_label  = "🔄 Đồng bộ GCal" if gcal_svc_ok else "⚠️ Chưa kết nối"
-            if st.button(sync_label, use_container_width=True, key="cal_sync",
-                         disabled=not gcal_svc_ok,
-                         type="primary" if gcal_svc_ok else "secondary"):
-                with st.spinner("Đang tải sự kiện từ Google Calendar..."):
+            if st.button("🔄 Đồng bộ GCal" if gcal_svc_ok else "⚠️ Chưa kết nối",
+                         use_container_width=True, key="cal_sync", disabled=not gcal_svc_ok):
+                with st.spinner("Đang tải..."):
                     fetched = lay_su_kien_gcal(week_start, week_end)
-                st.session_state.mtl_gcal_events    = fetched
+                st.session_state.mtl_gcal_events = fetched
                 st.session_state.mtl_gcal_synced_week = week_key
                 st.rerun()
-        with ctl5:
-            # Hiển thị trạng thái đồng bộ
-            if not gcal_svc_ok:
-                st.markdown(
-                    "<span style='font-size:0.75rem;color:#e07040;'>"
-                    "Đăng nhập Google ở thanh bên để đồng bộ lịch</span>",
-                    unsafe_allow_html=True,
-                )
-            elif st.session_state.mtl_gcal_synced_week == week_key:
-                n_ev = len(st.session_state.mtl_gcal_events)
-                st.markdown(
-                    f"<span style='font-size:0.75rem;color:#0f6e56;'>"
-                    f"✅ Đã đồng bộ · {n_ev} sự kiện</span>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    "<span style='font-size:0.75rem;color:#888;'>"
-                    "Nhấn 🔄 để tải sự kiện tuần này</span>",
-                    unsafe_allow_html=True,
-                )
 
-        st.markdown(
-            f"<div style='text-align:center;font-weight:700;color:{MTL_NAVY};"
-            f"margin:10px 0 4px;font-size:1rem;'>📅 Tuần {week_label}</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"<div style='text-align:center;font-weight:700;color:{MTL_NAVY};margin:10px 0 4px;font-size:1rem;'>📅 Tuần {week_label}</div>", unsafe_allow_html=True)
 
-        # Legend
-        gcal_events_this_week = (
-            st.session_state.mtl_gcal_events
-            if st.session_state.mtl_gcal_synced_week == week_key
-            else []
-        )
-        legend_html = (
-            "<div style='display:flex;gap:16px;flex-wrap:wrap;font-size:11px;"
-            f"color:#666;margin-bottom:10px;padding:6px 10px;"
-            f"background:#f8f9fc;border-radius:6px;border:1px solid #e0e8f5;'>"
-            f"<span><span style='display:inline-block;width:10px;height:10px;"
-            f"background:{MTL_NAVY};border-radius:2px;margin-right:4px;'></span>"
-            f"Task MTL (chưa xong)</span>"
-            f"<span><span style='display:inline-block;width:10px;height:10px;"
-            f"background:#0f6e56;border-radius:2px;margin-right:4px;'></span>"
-            f"Task MTL (đã xong)</span>"
-            f"<span><span style='display:inline-block;width:10px;height:10px;"
-            f"background:#A8874A;border-radius:2px;margin-right:4px;'></span>"
-            f"Sự kiện Google Calendar</span>"
-            f"</div>"
-        )
-        st.markdown(legend_html, unsafe_allow_html=True)
-
-        # ── Build calendar grid ──
-        day_names = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
-        cal_html  = "<div style='display:grid;grid-template-columns:repeat(7,1fr);gap:6px;'>"
+        gcal_events_this_week = st.session_state.mtl_gcal_events if st.session_state.mtl_gcal_synced_week == week_key else []
+        day_names = ["Thứ 2","Thứ 3","Thứ 4","Thứ 5","Thứ 6","Thứ 7","Chủ nhật"]
+        cal_html = "<div style='display:grid;grid-template-columns:repeat(7,1fr);gap:6px;'>"
 
         for i in range(7):
-            day      = week_start + timedelta(days=i)
-            day_str  = day.strftime("%Y-%m-%d")
+            day = week_start + timedelta(days=i)
+            day_str = day.strftime("%Y-%m-%d")
             is_today = (day.date() == now.date())
-
-            # MTL tasks
             day_tasks = [t for t in st.session_state.mtl_tasks if t.get("date") == day_str]
             if not is_admin:
                 day_tasks = [t for t in day_tasks if t.get("assignee") == nd["ten_tk"]]
-
-            # GCal events
             day_gcal = [e for e in gcal_events_this_week if e["date_str"] == day_str]
-
-            hdr_bg  = MTL_NAVY if is_today else "#f8f9fc"
-            hdr_clr = "white"  if is_today else MTL_NAVY
+            hdr_bg = MTL_NAVY if is_today else "#f8f9fc"
+            hdr_clr = "white" if is_today else MTL_NAVY
             border_style = "2px solid " + MTL_NAVY if is_today else "1px solid #e0e8f5"
 
             cell_items = ""
-
-            # Hiển thị GCal all-day events trước
-            for ev in [e for e in day_gcal if e["all_day"]]:
-                ev_color = ev.get("color", MTL_GOLD)
-                cal_nm   = ev["calendar_name"][:12]
-                cell_items += (
-                    "<div style='background:" + ev_color + "22;color:" + ev_color + ";"
-                    "border:1px solid " + ev_color + "66;"
-                    "border-radius:4px;padding:3px 5px;font-size:10px;"
-                    "margin-bottom:3px;white-space:nowrap;overflow:hidden;"
-                    "text-overflow:ellipsis;'"
-                    " title='[" + cal_nm + "] " + ev['title'] + " (Cả ngày)'>"
-                    "📆 " + ev["title"] + "</div>"
-                )
-
-            # GCal timed events
-            for ev in [e for e in day_gcal if not e["all_day"]]:
+            for ev in day_gcal:
                 ev_color = ev.get("color", MTL_GOLD)
                 time_lbl = ev["time_str"] if ev["time_str"] else ""
-                cal_nm   = ev["calendar_name"][:10]
-                cell_items += (
-                    "<div style='background:" + ev_color + "18;color:" + ev_color + ";"
-                    "border-left:3px solid " + ev_color + ";"
-                    "border-radius:0 4px 4px 0;padding:3px 5px;font-size:10px;"
-                    "margin-bottom:3px;white-space:nowrap;overflow:hidden;"
-                    "text-overflow:ellipsis;'"
-                    " title='[" + cal_nm + "] " + ev['title'] + " " + time_lbl + "'>"
-                    + (time_lbl + " " if time_lbl else "") + ev["title"] + "</div>"
-                )
-
-            # MTL tasks
+                cell_items += f"<div style='background:{ev_color}22;color:{ev_color};border-left:3px solid {ev_color};border-radius:0 4px 4px 0;padding:3px 5px;font-size:10px;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>📆 {(time_lbl + ' ') if time_lbl else ''}{ev['title']}</div>"
             for t in day_tasks:
-                bg_t    = "#0f6e56" if t.get("done") else MTL_NAVY
-                txt_t   = "#9fe1cb" if t.get("done") else MTL_GOLD2
-                strike  = "text-decoration:line-through;" if t.get("done") else ""
-                t_title  = t["title"]
-                t_assign = ten_nv(t.get("assignee", ""))
-                cell_items += (
-                    "<div style='background:" + bg_t + ";color:" + txt_t + ";"
-                    "border-radius:4px;padding:3px 5px;font-size:10px;"
-                    "margin-bottom:3px;" + strike +
-                    "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'"
-                    " title='[MTL] " + t_title + " - " + t_assign + "'>"
-                    + t_title + "</div>"
-                )
-
+                bg_t = "#0f6e56" if t.get("done") else MTL_NAVY
+                txt_t = "#9fe1cb" if t.get("done") else MTL_GOLD2
+                strike = "text-decoration:line-through;" if t.get("done") else ""
+                cell_items += f"<div style='background:{bg_t};color:{txt_t};border-radius:4px;padding:3px 5px;font-size:10px;margin-bottom:3px;{strike}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{t['title']}</div>"
             if not cell_items:
                 cell_items = "<span style='color:#ccc;font-size:10px;'>Trống</span>"
-
-            cal_html += (
-                "<div style='border:" + border_style + ";"
-                "border-radius:8px;overflow:hidden;min-height:130px;'>"
-                "<div style='background:" + hdr_bg + ";color:" + hdr_clr + ";"
-                "font-size:11px;font-weight:600;padding:5px 7px;text-align:center;'>"
-                + day_names[i] + "<br>" + day.strftime('%d/%m') + "</div>"
-                "<div style='padding:6px;background:white;min-height:100px;'>"
-                + cell_items +
-                "</div></div>"
-            )
-
+            cal_html += f"<div style='border:{border_style};border-radius:8px;overflow:hidden;min-height:130px;'><div style='background:{hdr_bg};color:{hdr_clr};font-size:11px;font-weight:600;padding:5px 7px;text-align:center;'>{day_names[i]}<br>{day.strftime('%d/%m')}</div><div style='padding:6px;background:white;min-height:100px;'>{cell_items}</div></div>"
         cal_html += "</div>"
         st.markdown(cal_html, unsafe_allow_html=True)
 
-        # ── Chi tiết sự kiện GCal khi có dữ liệu ──
-        if gcal_events_this_week:
-            with st.expander(
-                f"📋 Chi tiết {len(gcal_events_this_week)} sự kiện Google Calendar tuần này",
-                expanded=False,
-            ):
-                # Nhóm theo calendar
-                by_cal: dict = {}
-                for ev in gcal_events_this_week:
-                    cn = ev["calendar_name"]
-                    by_cal.setdefault(cn, []).append(ev)
-
-                for cal_name, evs in by_cal.items():
-                    st.markdown(
-                        f"<div style='font-weight:600;font-size:0.82rem;color:{MTL_NAVY};"
-                        f"margin:8px 0 4px;border-left:3px solid {MTL_GOLD};"
-                        f"padding-left:8px;'>📅 {cal_name} ({len(evs)})</div>",
-                        unsafe_allow_html=True,
-                    )
-                    for ev in evs:
-                        ev_color  = ev.get("color", MTL_GOLD)
-                        time_disp = "Cả ngày" if ev["all_day"] else ev.get("time_str", "")
-                        loc_disp  = f" · 📍 {ev['location']}" if ev.get("location") else ""
-                        st.markdown(
-                            f"<div style='display:flex;align-items:flex-start;gap:8px;"
-                            f"padding:6px 8px;margin-bottom:4px;background:#f8f9fc;"
-                            f"border-radius:6px;border-left:3px solid {ev_color};'>"
-                            f"<div style='min-width:55px;font-size:0.72rem;color:{ev_color};"
-                            f"font-weight:600;margin-top:1px;'>{time_disp}</div>"
-                            f"<div>"
-                            f"<div style='font-size:0.83rem;font-weight:600;color:{MTL_NAVY};'>"
-                            f"{ev['title']}</div>"
-                            f"<div style='font-size:0.72rem;color:#888;margin-top:2px;'>"
-                            f"📅 {ev['date_str']}{loc_disp}</div>"
-                            + (f"<div style='font-size:0.72rem;color:#666;margin-top:2px;"
-                               f"font-style:italic;'>{ev['description'][:100]}...</div>"
-                               if ev.get("description") and len(ev.get("description","")) > 10 else "")
-                            + f"</div></div>",
-                            unsafe_allow_html=True,
-                        )
-
-        # ── Thêm task mới nhanh từ lịch ──
-        st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("➕ Thêm task nhanh vào ngày", expanded=False):
-            qc1, qc2, qc3 = st.columns([2, 1, 1])
-            with qc1:
-                q_title = st.text_input("Tiêu đề task", key="quick_task_title",
-                                        placeholder="Nhập tiêu đề nhanh...")
-            with qc2:
-                q_date  = st.date_input("Ngày", key="quick_task_date",
-                                        value=now.date())
-            with qc3:
-                q_sync  = st.checkbox("Thêm vào GCal", key="quick_sync_gcal",
-                                      value=gcal_svc_ok)
-            if st.button("✅ Thêm task", key="quick_add_task", type="primary"):
-                if q_title.strip():
-                    new_qt = {
-                        "id":         task_gen_id(),
-                        "title":      q_title.strip(),
-                        "desc":       "",
-                        "assignee":   nd["ten_tk"],
-                        "priority":   "medium",
-                        "date":       q_date.strftime("%Y-%m-%d"),
-                        "time":       "",
-                        "notes":      "",
-                        "done":       False,
-                        "created_at": datetime.now().isoformat(),
-                        "updated_at": datetime.now().isoformat(),
-                        "completed_at": None,
-                        "cal_added":  False,
-                    }
-                    st.session_state.mtl_tasks.insert(0, new_qt)
-                    if q_sync and gcal_svc_ok:
-                        ev_id = them_task_vao_gcal(new_qt)
-                        if ev_id:
-                            new_qt["cal_added"] = True
-                            st.success(f"✅ Đã thêm task và tạo sự kiện GCal!")
-                        else:
-                            st.warning("Task đã thêm nhưng không tạo được sự kiện GCal.")
-                    else:
-                        st.success("✅ Đã thêm task!")
-                    st.rerun()
-                else:
-                    st.warning("Nhập tiêu đề task trước!")
-
-    # ════════════════════════════════════════════
-    #  STAB 2 — HIỆU SUẤT (chỉ admin)
-    # ════════════════════════════════════════════
+    # STAB 2 — HIỆU SUẤT (chỉ admin)
     if is_admin:
         with stabs[2]:
-            st.markdown(
-                f"<div style='font-weight:700;font-size:1rem;color:{MTL_NAVY};"
-                f"margin-bottom:16px;'>📊 Phân tích hiệu suất nhân viên</div>",
-                unsafe_allow_html=True,
-            )
-
-            # Bộ lọc kỳ
-            hp1, hp2, hp3 = st.columns([2, 1, 3])
+            st.markdown(f"<div style='font-weight:700;font-size:1rem;color:{MTL_NAVY};margin-bottom:16px;'>📊 Phân tích hiệu suất</div>", unsafe_allow_html=True)
+            hp1, hp2 = st.columns([2, 1])
             with hp1:
-                period_sel = st.radio(
-                    "Xem theo",
-                    ["Tuần", "Tháng", "Năm"],
-                    horizontal=True,
-                    key="perf_period_radio",
-                )
+                period_sel = st.radio("Xem theo", ["Tuần","Tháng","Năm"], horizontal=True, key="perf_period_radio")
             with hp2:
-                year_sel = st.selectbox(
-                    "Năm",
-                    list(range(datetime.now().year, datetime.now().year - 5, -1)),
-                    key="perf_year_sel",
-                )
+                year_sel = st.selectbox("Năm", list(range(datetime.now().year, datetime.now().year - 5, -1)), key="perf_year_sel")
 
-            all_t = st.session_state.mtl_tasks
-
-            # ── Số liệu tổng ──
-            if period_sel == "Tuần":
-                period_tasks = tasks_of_year(year_sel)
-                title_suffix = f"năm {year_sel}"
-            elif period_sel == "Tháng":
-                period_tasks = tasks_of_year(year_sel)
-                title_suffix = f"năm {year_sel}"
-            else:
-                period_tasks = tasks_of_year(year_sel)
-                title_suffix = f"năm {year_sel}"
-
+            period_tasks = tasks_of_year(year_sel)
             done_all = sum(1 for t in period_tasks if t.get("done"))
             rate_all = int(done_all / len(period_tasks) * 100) if period_tasks else 0
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric(f"Task {title_suffix}", len(period_tasks))
+            m1.metric(f"Task {year_sel}", len(period_tasks))
             m2.metric("Hoàn thành", done_all, delta=f"{rate_all}%")
             m3.metric("Chưa xong", len(period_tasks) - done_all)
             m4.metric("Tỷ lệ TB", f"{rate_all}%")
 
             st.markdown("---")
-
-            # ── Biểu đồ theo kỳ ──
+            labels, done_v, todo_v = [], [], []
             if period_sel == "Tuần":
-                labels, done_v, todo_v = [], [], []
                 for w in range(7, -1, -1):
                     ref = datetime.now() - timedelta(weeks=w)
                     wstr = ref.strftime("%G-W%V")
@@ -3050,18 +2219,14 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
                     todo_v.append(sum(1 for t in wt if not t.get("done")))
                     labels.append(f"T{ref.strftime('%V')}")
                 chart_title = "Task 8 tuần gần nhất"
-
             elif period_sel == "Tháng":
-                labels, done_v, todo_v = [], [], []
                 for m in range(1, 13):
                     mt = tasks_of_month(year_sel, m)
                     done_v.append(sum(1 for t in mt if t.get("done")))
                     todo_v.append(sum(1 for t in mt if not t.get("done")))
                     labels.append(f"T{m}")
                 chart_title = f"Task 12 tháng năm {year_sel}"
-
-            else:  # Năm
-                labels, done_v, todo_v = [], [], []
+            else:
                 for y in range(year_sel - 4, year_sel + 1):
                     yt = tasks_of_year(y)
                     done_v.append(sum(1 for t in yt if t.get("done")))
@@ -3069,161 +2234,36 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
                     labels.append(str(y))
                 chart_title = "Task 5 năm gần nhất"
 
-            st.markdown(
-                f"<div style='background:white;border:1px solid #e0e8f5;border-radius:10px;"
-                f"padding:16px 20px;margin-bottom:20px;'>"
-                + ve_bieu_do(labels, done_v, todo_v, chart_title)
-                + "</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<div style='background:white;border:1px solid #e0e8f5;border-radius:10px;padding:16px 20px;margin-bottom:20px;'>{ve_bieu_do(labels, done_v, todo_v, chart_title)}</div>", unsafe_allow_html=True)
 
-            # ── Thẻ hiệu suất từng luật sư ──
-            st.markdown(
-                f"<div style='font-weight:600;color:{MTL_NAVY};margin-bottom:10px;'>"
-                f"👤 Hiệu suất từng luật sư — {title_suffix}</div>",
-                unsafe_allow_html=True,
-            )
-
+            # Bảng xếp hạng
+            st.markdown(f"<div style='font-weight:600;color:{MTL_NAVY};margin:16px 0 10px;'>🏆 Bảng xếp hạng</div>", unsafe_allow_html=True)
             member_rows = []
             for m in THANH_VIEN:
-                mt   = [t for t in period_tasks if t.get("assignee") == m["id"]]
+                mt = [t for t in period_tasks if t.get("assignee") == m["id"]]
                 done = sum(1 for t in mt if t.get("done"))
                 rate = int(done / len(mt) * 100) if mt else 0
-                hi   = sum(1 for t in mt if t.get("priority") == "high")
-                member_rows.append((m, mt, done, rate, hi))
+                member_rows.append((m, mt, done, rate))
+            member_rows.sort(key=lambda x: x[3], reverse=True)
 
-            member_rows.sort(key=lambda x: x[3], reverse=True)  # Sắp xếp theo tỷ lệ
-
-            cols_nv = st.columns(2)
-            for idx, (m, mt, done, rate, hi) in enumerate(member_rows):
-                bar_color = "#0f6e56" if rate >= 80 else ("#C9A96E" if rate >= 50 else "#e24b4a")
-                rank_icon = ["🥇","🥈","🥉"][idx] if idx < 3 else f"#{idx+1}"
-
-                with cols_nv[idx % 2]:
-                    st.markdown(
-                        f"<div style='background:#f8f9fc;border:1px solid #e0e8f5;"
-                        f"border-radius:10px;padding:14px;margin-bottom:12px;'>"
-                        f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px;'>"
-                        f"<div style='width:34px;height:34px;border-radius:50%;background:{MTL_NAVY};"
-                        f"color:{MTL_GOLD2};display:flex;align-items:center;justify-content:center;"
-                        f"font-weight:700;font-size:14px;'>{m['ho_ten'][0]}</div>"
-                        f"<div><div style='font-weight:600;font-size:0.88rem;'>{m['ho_ten']}</div>"
-                        f"<div style='font-size:0.75rem;color:#888;'>{m['chuc_vu']}</div></div>"
-                        f"<div style='margin-left:auto;font-size:1.1rem;'>{rank_icon}</div>"
-                        f"</div>"
-                        # Metrics
-                        f"<div style='display:grid;grid-template-columns:repeat(3,1fr);"
-                        f"gap:6px;margin-bottom:10px;text-align:center;'>"
-                        f"<div style='background:white;border-radius:6px;padding:6px;"
-                        f"border:1px solid #e0e8f5;'>"
-                        f"<div style='font-size:1.2rem;font-weight:700;color:{MTL_NAVY};'>{len(mt)}</div>"
-                        f"<div style='font-size:10px;color:#888;'>Tổng</div></div>"
-                        f"<div style='background:white;border-radius:6px;padding:6px;"
-                        f"border:1px solid #e0e8f5;'>"
-                        f"<div style='font-size:1.2rem;font-weight:700;color:#0f6e56;'>{done}</div>"
-                        f"<div style='font-size:10px;color:#888;'>Xong</div></div>"
-                        f"<div style='background:white;border-radius:6px;padding:6px;"
-                        f"border:1px solid #e0e8f5;'>"
-                        f"<div style='font-size:1.2rem;font-weight:700;color:{bar_color};'>{rate}%</div>"
-                        f"<div style='font-size:10px;color:#888;'>Tỷ lệ</div></div>"
-                        f"</div>"
-                        # Thanh tiến độ
-                        f"<div style='background:#e0e8f5;border-radius:4px;height:6px;overflow:hidden;'>"
-                        f"<div style='background:{bar_color};width:{rate}%;height:6px;"
-                        f"border-radius:4px;'></div></div>"
-                        f"<div style='display:flex;justify-content:space-between;"
-                        f"font-size:10px;color:#999;margin-top:3px;'>"
-                        f"<span>Hoàn thành</span><span>{rate}%</span></div>"
-                        + (f"<div style='margin-top:6px;font-size:10px;color:#888;'>"
-                           f"Ưu tiên cao: {hi} task</div>" if hi else "")
-                        + f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-            # ── Bảng xếp hạng ──
-            st.markdown(
-                f"<div style='font-weight:600;color:{MTL_NAVY};margin:16px 0 10px;'>"
-                f"🏆 Bảng xếp hạng — {title_suffix}</div>",
-                unsafe_allow_html=True,
-            )
-
-            rank_medals = ["🥇","🥈","🥉"]
-            max_done    = max((r[2] for r in member_rows), default=1)
-            table_html  = (
-                f"<table style='width:100%;border-collapse:collapse;font-size:0.82rem;'>"
-                f"<thead><tr style='background:{MTL_NAVY};color:white;'>"
-                f"<th style='padding:8px 10px;text-align:left;'>#</th>"
-                f"<th style='padding:8px 10px;text-align:left;'>Luật sư</th>"
-                f"<th style='padding:8px 10px;text-align:center;'>Hoàn thành</th>"
-                f"<th style='padding:8px 10px;text-align:center;'>Tổng</th>"
-                f"<th style='padding:8px 10px;text-align:center;'>Tỷ lệ</th>"
-                f"<th style='padding:8px 10px;'>Hiệu suất</th>"
-                f"</tr></thead><tbody>"
-            )
-            for i, (m, mt, done, rate, hi) in enumerate(member_rows):
-                bg_row = "#f8f9fc" if i % 2 == 0 else "white"
-                medal  = rank_medals[i] if i < 3 else f"#{i+1}"
+            for i, (m, mt, done, rate) in enumerate(member_rows):
+                medal = ["🥇","🥈","🥉"][i] if i < 3 else f"#{i+1}"
                 rate_c = "#0f6e56" if rate >= 80 else ("#C9A96E" if rate >= 50 else "#e24b4a")
-                bar_w  = int(done / max_done * 100) if max_done else 0
-                table_html += (
-                    f"<tr style='background:{bg_row};'>"
-                    f"<td style='padding:8px 10px;'>{medal}</td>"
-                    f"<td style='padding:8px 10px;font-weight:600;'>{m['ho_ten']}</td>"
-                    f"<td style='padding:8px 10px;text-align:center;color:#0f6e56;"
-                    f"font-weight:700;'>{done}</td>"
-                    f"<td style='padding:8px 10px;text-align:center;color:#888;'>{len(mt)}</td>"
-                    f"<td style='padding:8px 10px;text-align:center;'>"
-                    f"<span style='background:{rate_c}22;color:{rate_c};border-radius:4px;"
-                    f"padding:2px 7px;font-weight:600;'>{rate}%</span></td>"
-                    f"<td style='padding:8px 10px;'>"
-                    f"<div style='background:#e0e8f5;border-radius:3px;height:5px;width:120px;'>"
-                    f"<div style='background:{rate_c};width:{bar_w}%;height:5px;"
-                    f"border-radius:3px;'></div></div></td>"
-                    f"</tr>"
-                )
-            table_html += "</tbody></table>"
-            st.markdown(
-                f"<div style='border:1px solid #e0e8f5;border-radius:10px;"
-                f"overflow:hidden;'>{table_html}</div>",
-                unsafe_allow_html=True,
-            )
+                st.markdown(f"<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f8f9fc;border-radius:8px;margin-bottom:6px;'><span style='font-size:1.1rem;'>{medal}</span><div style='flex:1;'><b>{m['ho_ten']}</b> &nbsp; <span style='color:#666;font-size:0.82rem;'>{done}/{len(mt)} task</span></div><span style='background:{rate_c}22;color:{rate_c};border-radius:4px;padding:3px 10px;font-weight:600;'>{rate}%</span></div>", unsafe_allow_html=True)
 
-    # ════════════════════════════════════════════
-    #  STAB 3 (admin) / STAB 2 (luật sư) — BÁO CÁO
-    # ════════════════════════════════════════════
+    # STAB BÁO CÁO
     rpt_tab_idx = 3 if is_admin else 2
     with stabs[rpt_tab_idx]:
-        st.markdown(
-            f"<div style='font-weight:700;font-size:0.95rem;color:{MTL_NAVY};"
-            f"margin-bottom:16px;'>📤 Báo cáo công việc tuần — Gửi Gmail tự động Thứ 5 · 20:00</div>",
-            unsafe_allow_html=True,
-        )
-
-        # Kiểm tra tự động gửi (Thứ 5, 20:xx)
+        st.markdown(f"<div style='font-weight:700;font-size:0.95rem;color:{MTL_NAVY};margin-bottom:16px;'>📤 Báo cáo công việc tuần</div>", unsafe_allow_html=True)
         _now = datetime.now()
-        _is_thu5_20h = (_now.weekday() == 3 and _now.hour == 20)
         _cur_wk = cur_week_str()
-        _auto_triggered = (
-            _is_thu5_20h and
-            st.session_state.mtl_last_sent_week != _cur_wk and
-            bool(st.session_state.mtl_tasks)
-        )
 
-        if _auto_triggered:
-            st.warning("🤖 Phát hiện Thứ 5 lúc 20:00 — đang tự động tạo và gửi báo cáo tuần!")
-
-        # Chọn tuần
         rc1, rc2 = st.columns([2, 3])
         with rc1:
-            week_input = st.text_input(
-                "Tuần báo cáo (ISO, vd: 2026-W17)",
-                value=_cur_wk,
-                key="rpt_week_input",
-            )
+            week_input = st.text_input("Tuần báo cáo (vd: 2026-W17)", value=_cur_wk, key="rpt_week_input")
 
-        # Lấy task tuần được chọn
         week_tasks_rpt = tasks_of_week(week_input)
-        done_rpt  = sum(1 for t in week_tasks_rpt if t.get("done"))
+        done_rpt = sum(1 for t in week_tasks_rpt if t.get("done"))
         total_rpt = len(week_tasks_rpt)
 
         r1, r2, r3, r4 = st.columns(4)
@@ -3231,138 +2271,67 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;gap:12px;">
         r2.metric("Hoàn thành", done_rpt)
         r3.metric("Chưa xong", total_rpt - done_rpt)
         r4.metric("Tỷ lệ", f"{int(done_rpt/total_rpt*100) if total_rpt else 0}%")
-
         st.markdown("---")
 
-        # Cấu hình email (chỉ hiển thị đầy đủ cho admin)
         if is_admin:
-            with st.expander("📧 Cấu hình danh sách gửi", expanded=False):
+            with st.expander("📧 Cấu hình gửi email", expanded=False):
                 ec1, ec2 = st.columns(2)
                 with ec1:
-                    to_emails = st.text_area(
-                        "Email nhận chính (TO) — mỗi dòng 1 email",
-                        placeholder="manager@luatminhtu.vn\nbanlanhDao@luatminhtu.vn",
-                        key="rpt_to_emails",
-                        height=90,
-                    )
+                    to_emails = st.text_area("TO (mỗi dòng 1 email)", key="rpt_to_emails", height=90)
                 with ec2:
-                    cc_emails = st.text_area(
-                        "CC — mỗi dòng 1 email",
-                        placeholder="director@luatminhtu.vn",
-                        key="rpt_cc_emails",
-                        height=90,
-                    )
-                rpt_subject = st.text_input(
-                    "Tiêu đề email",
-                    value=f"[Báo cáo tuần] {TEN_CONG_TY} — {week_input}",
-                    key="rpt_subject",
-                )
+                    cc_emails = st.text_area("CC (mỗi dòng 1 email)", key="rpt_cc_emails", height=90)
+                rpt_subject = st.text_input("Tiêu đề", value=f"[Báo cáo tuần] {TEN_CONG_TY} — {week_input}", key="rpt_subject")
         else:
-            to_emails   = st.session_state.get(f"gemail_{nd['ten_tk']}", "")
-            cc_emails   = ""
+            to_emails = st.session_state.get(f"gemail_{nd['ten_tk']}", "")
+            cc_emails = ""
             rpt_subject = f"[Báo cáo tuần] Công việc của tôi — {week_input}"
 
-        # Nút tạo báo cáo
         rpt_c1, rpt_c2, rpt_c3 = st.columns([1, 1, 3])
         with rpt_c1:
-            gen_btn = st.button("🤖 Tạo báo cáo AI", type="primary",
-                                use_container_width=True, key="rpt_gen")
+            gen_btn = st.button("🤖 Tạo báo cáo AI", type="primary", use_container_width=True, key="rpt_gen")
         with rpt_c2:
-            send_btn_disabled = not bool(st.session_state.mtl_rpt_text.strip())
-            send_btn = st.button(
-                "📤 Gửi Gmail",
-                use_container_width=True,
-                disabled=send_btn_disabled,
-                key="rpt_send",
-            )
+            send_btn = st.button("📤 Gửi Gmail", use_container_width=True,
+                disabled=not bool(st.session_state.mtl_rpt_text.strip()), key="rpt_send")
 
-        # Tạo báo cáo
-        if gen_btn or _auto_triggered:
-            if not week_tasks_rpt and not _auto_triggered:
-                st.warning("Không có task nào trong tuần được chọn.")
+        if gen_btn:
+            if not week_tasks_rpt:
+                st.warning("Không có task nào trong tuần.")
             else:
-                with st.spinner("🤖 Claude đang tổng hợp báo cáo..."):
-                    # Nếu không phải admin, lọc task của mình
-                    tasks_for_rpt = week_tasks_rpt if is_admin else [
-                        t for t in week_tasks_rpt if t.get("assignee") == nd["ten_tk"]
-                    ]
-                    rpt_text = tao_bao_cao_tuan(week_input, tasks_for_rpt)
-                    st.session_state.mtl_rpt_text = rpt_text
-                st.success("✅ Đã tạo báo cáo!")
-                if _auto_triggered:
-                    # Tự động gửi luôn
-                    to_list  = [e.strip() for e in to_emails.splitlines() if e.strip()] if is_admin else [to_emails]
-                    cc_list  = [e.strip() for e in cc_emails.splitlines() if e.strip()] if is_admin else []
-                    ok, err  = gui_bao_cao_gmail(to_list, cc_list, rpt_subject, rpt_text)
-                    if ok:
-                        st.session_state.mtl_last_sent_week = _cur_wk
-                        st.success(f"✅ Đã tự động gửi đến {', '.join(to_list)}")
-                    else:
-                        st.error(f"❌ Gửi thất bại: {err}")
+                with st.spinner("🤖 Claude đang tổng hợp..."):
+                    tasks_for_rpt = week_tasks_rpt if is_admin else [t for t in week_tasks_rpt if t.get("assignee") == nd["ten_tk"]]
+                    st.session_state.mtl_rpt_text = tao_bao_cao_tuan(week_input, tasks_for_rpt)
+                st.success("✅ Đã tạo!")
                 st.rerun()
 
-        # Gửi thủ công
         if send_btn:
             if not _gmail_service():
-                st.error("❌ Chưa kết nối Gmail. Đăng nhập Google ở thanh bên trước.")
+                st.error("❌ Chưa kết nối Gmail.")
             else:
                 to_list = [e.strip() for e in to_emails.splitlines() if e.strip()] if is_admin else [to_emails]
                 cc_list = [e.strip() for e in cc_emails.splitlines() if e.strip()] if is_admin else []
                 if not any(to_list):
-                    st.error("Hãy nhập ít nhất 1 email nhận chính (TO).")
+                    st.error("Hãy nhập ít nhất 1 email.")
                 else:
                     with st.spinner("📤 Đang gửi..."):
-                        ok, err = gui_bao_cao_gmail(
-                            to_list, cc_list, rpt_subject,
-                            st.session_state.mtl_rpt_text,
-                        )
+                        ok, err = gui_bao_cao_gmail(to_list, cc_list, rpt_subject, st.session_state.mtl_rpt_text)
                     if ok:
                         st.session_state.mtl_last_sent_week = week_input
-                        st.success(
-                            f"✅ Đã gửi đến: **{', '.join(to_list)}**"
-                            + (f" (CC: {', '.join(cc_list)})" if cc_list else "")
-                        )
+                        luu_phien_cua_user(nd["ten_tk"])
+                        st.success(f"✅ Đã gửi đến: {', '.join(to_list)}")
                     else:
-                        st.error(f"❌ Gửi thất bại: {err}")
+                        st.error(f"❌ {err}")
 
-        # Hiển thị nội dung báo cáo
         if st.session_state.mtl_rpt_text:
             st.markdown("#### 📊 Nội dung báo cáo")
-            rpt_edit = st.text_area(
-                "Chỉnh sửa trước khi gửi (tùy chọn)",
-                value=st.session_state.mtl_rpt_text,
-                height=380,
-                key="rpt_edit_area",
-            )
+            rpt_edit = st.text_area("Chỉnh sửa", value=st.session_state.mtl_rpt_text, height=380, key="rpt_edit_area")
             st.session_state.mtl_rpt_text = rpt_edit
-
-            # Export Word
             if rpt_edit.strip():
-                wb_rpt = tao_file_word(
-                    f"BÁO CÁO TUẦN {week_input}",
-                    rpt_edit,
-                    nd["ho_ten"],
-                    nd["chuc_vu"],
-                )
-                st.download_button(
-                    "⬇️ Xuất Word",
-                    data=wb_rpt,
-                    file_name=f"BaoCaoTuan_{week_input.replace('-','_')}_{datetime.now().strftime('%d%m%Y')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
+                wb_rpt = tao_file_word(f"BÁO CÁO TUẦN {week_input}", rpt_edit, nd["ho_ten"], nd["chuc_vu"])
+                st.download_button("⬇️ Xuất Word", data=wb_rpt,
+                    file_name=f"BaoCaoTuan_{week_input.replace('-','_')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        # Trạng thái gửi tuần hiện tại
         st.markdown("---")
-        last_sent = st.session_state.mtl_last_sent_week
-        if last_sent:
-            st.markdown(
-                f"<div style='background:#eaf3de;border:1px solid #c0dd97;border-radius:8px;"
-                f"padding:8px 12px;font-size:0.82rem;color:#27500a;'>"
-                f"✅ Tuần <strong>{last_sent}</strong> đã gửi báo cáo thành công.</div>",
-                unsafe_allow_html=True,
-            )
-        next_thu = _now + timedelta(days=(3 - _now.weekday()) % 7)
-        st.caption(
-            f"⏱ Gửi tự động tiếp theo: Thứ 5 {next_thu.strftime('%d/%m/%Y')} lúc 20:00 | "
-            f"Hiện tại: {_now.strftime('%A %d/%m %H:%M')}"
-        )
+        if st.session_state.mtl_last_sent_week:
+            st.markdown(f"<div style='background:#eaf3de;border:1px solid #c0dd97;border-radius:8px;padding:8px 12px;font-size:0.82rem;color:#27500a;'>✅ Tuần <strong>{st.session_state.mtl_last_sent_week}</strong> đã gửi.</div>", unsafe_allow_html=True)
+        st.caption(f"⏱ Hiện tại: {_now.strftime('%A %d/%m %H:%M')}")

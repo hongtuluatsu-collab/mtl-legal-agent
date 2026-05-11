@@ -3,7 +3,8 @@ anthropic
 python-docx
 PyPDF2
 pillow
+pymupdf
 google-auth
 google-auth-oauthlib
 google-api-python-client
-pymupdf
+requests
