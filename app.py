@@ -511,16 +511,18 @@ def goi_claude(messages, system_prompt):
     try:
         client = anthropic.Anthropic(api_key=API_KEY)
         response = client.messages.create(
-            model="claude-opus-4-5",
+            model="claude-sonnet-4-6",   # ← đổi từ "claude-opus-4-5"
             max_tokens=4096,
             system=system_prompt,
             messages=messages,
         )
-        return response.content[0].text
+        # Parse an toàn — duyệt qua mọi text block
+        return "".join(b.text for b in response.content if hasattr(b, "text")) \
+               or "⚠️ AI trả về nội dung rỗng."
     except anthropic.AuthenticationError:
-        return "❌ API Key không hợp lệ. Kiểm tra lại dòng ANTHROPIC_API_KEY ở đầu file app.py."
+        return "❌ API Key không hợp lệ."
     except Exception as e:
-        return f"❌ Lỗi: {e}"
+        return f"❌ Lỗi gọi AI: {e}"
 
 def phan_tich_ho_so(noi_dung_files, yeu_cau=""):
     system = f"""Bạn là chuyên gia pháp lý Việt Nam tại {TEN_CONG_TY}.
@@ -1660,13 +1662,21 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                 st.session_state.ei_tone = tone_sel
                 if st.button("✦ Tạo nháp AI", use_container_width=True, key="ei_gen"):
                     with st.spinner("Claude đang soạn..."):
-                        st.session_state.ei_draft = soan_phan_hoi(
-                            em, st.session_state.ei_analysis, tone_sel)
+                    ai_draft = soan_phan_hoi(em, st.session_state.ei_analysis, tone_sel)
+                    # ✅ Cập nhật TRỰC TIẾP vào key của widget — không qua biến trung gian
+                    st.session_state.ei_ta = ai_draft
+                    st.session_state.ei_draft = ai_draft
                     st.rerun()
+
                 reply_to = st.text_input("Gửi đến", value=em.get("fromEmail",""), key="ei_to")
-                draft = st.text_area("Nội dung phản hồi", value=st.session_state.ei_draft,
-                                     height=240, key="ei_ta",
-                                     placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn...")
+
+                # ✅ Bỏ value= đi, chỉ dùng key — Streamlit sẽ tự lấy giá trị từ st.session_state.ei_ta
+                draft = st.text_area(
+                    "Nội dung phản hồi",
+                    height=240,
+                    key="ei_ta",
+                    placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn..."
+                )
                 st.session_state.ei_draft = draft
                 sa, sb = st.columns(2)
                 with sa:
