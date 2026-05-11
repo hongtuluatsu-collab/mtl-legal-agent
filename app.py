@@ -1077,16 +1077,22 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
             data = f.read()
             ext  = f.name.rsplit(".", 1)[-1].lower()
             if ext == "pdf":
-            with st.spinner(f"📄 Đang xử lý {f.name}..."):
-                pdf_items = doc_pdf_thong_minh(data, f.name)
-            st.session_state.noi_dung_files.extend(pdf_items)
+                with st.spinner(f"📄 Đang xử lý {f.name}..."):
+                    pdf_items = doc_pdf_thong_minh(data, f.name)
+                st.session_state.noi_dung_files.extend(pdf_items)
             elif ext == "docx":
-                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "docx", "du_lieu": doc_docx(data)})
-            elif ext in ["png", "jpg", "jpeg", "tiff", "bmp"]:
-                media = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "tiff": "image/tiff", "bmp": "image/bmp"}
                 st.session_state.noi_dung_files.append({
-                    "ten": f.name, "loai": "anh",
-                    "du_lieu": base64.standard_b64encode(data).decode(),
+                    "ten": f.name, "loai": "docx", "du_lieu": doc_docx(data),
+                })
+            elif ext in ["png", "jpg", "jpeg", "tiff", "bmp"]:
+                media = {
+                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "png": "image/png", "tiff": "image/tiff", "bmp": "image/bmp",
+                }
+                st.session_state.noi_dung_files.append({
+                    "ten":        f.name,
+                    "loai":       "anh",
+                    "du_lieu":    base64.standard_b64encode(data).decode(),
                     "media_type": media.get(ext, "image/jpeg"),
                 })
         if st.session_state.noi_dung_files:
