@@ -1419,27 +1419,95 @@ Nội dung:\n{email.get('body','')[:3000]}"""
     except Exception:
         return {}
 
+def lam_sach_markdown(text: str) -> str:
+    """
+    Quét sạch mọi ký tự markdown khỏi văn bản trước khi gửi đối tác:
+    bỏ **bold**, *italic*, __underline__, `code`, # heading, > quote, - bullet, • bullet.
+    Đây là tấm lưới an toàn — phòng trường hợp AI vẫn xuất markdown dù đã yêu cầu không.
+    """
+    if not text:
+        return text
 
+    # 1. Bỏ định dạng bold/italic: **abc**, __abc__, *abc*, _abc_
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__",     r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"(?<!\w)\*([^\*\n]+?)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^_\n]+?)_(?!\w)",     r"\1", text)
+
+    # 2. Bỏ inline code `abc`
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+
+    # 3. Bỏ heading #, ##, ### đầu dòng
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+
+    # 4. Bỏ blockquote > đầu dòng
+    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
+
+    # 5. Đổi bullet đầu dòng (- / * / •) thành chữ thường
+    text = re.sub(r"^[\s]*[-•*]\s+", "", text, flags=re.MULTILINE)
+
+    # 6. Quét dọn — xóa mọi dấu sao còn sót lại (an toàn cuối)
+    text = text.replace("**", "").replace("*", "")
+
+    # 7. Gọn dòng trống thừa (3+ xuống dòng → 2)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 def soan_phan_hoi(email: dict, analysis: dict, tone: str) -> str:
     tone_map = {
-        "formal":   "trang trọng, văn phong luật sư chuyên nghiệp",
-        "friendly": "thân thiện, gần gũi nhưng vẫn chuyên nghiệp",
-        "firm":     "kiên quyết, rõ ràng, thể hiện quyền hạn",
-        "urgent":   "khẩn cấp, nhấn mạnh cần hành động ngay",
+        "formal":   "trang trọng tối đa, văn phong luật sư cao cấp, sử dụng kính ngữ pháp lý chuẩn mực",
+        "friendly": "trang trọng nhưng ấm áp, thể hiện sự quan tâm chân thành mà vẫn chuyên nghiệp",
+        "firm":     "trang trọng, kiên quyết, dứt khoát, thể hiện rõ thẩm quyền và quan điểm pháp lý",
+        "urgent":   "trang trọng, khẩn cấp, nhấn mạnh tính cấp thiết và đề nghị hành động kịp thời",
     }
     ctx = ""
     if analysis:
-        ctx = (f"\nPhân tích: {analysis.get('summary','')}\n"
-               f"Hành động: {'; '.join(analysis.get('action_items',[]))}")
-    system = f"Bạn là luật sư tại {TEN_CONG_TY}."
-    prompt = (f"Soạn email phản hồi tiếng Việt, giọng {tone_map.get(tone,'trang trọng')}. "
-              f"Bắt đầu 'Kính gửi...', KHÔNG viết subject, xác nhận nhận email, "
-              f"nêu hướng xử lý, đề xuất bước tiếp theo. "
-              f"Ký tên: {nd['ho_ten']} — {TEN_CONG_TY}{ctx}\n\n"
-              f"Tiêu đề: {email.get('subject','')}\n"
-              f"Từ: {email.get('fromName','')}\n"
-              f"Nội dung:\n{email.get('body','')[:2000]}")
-    return goi_claude([{"role":"user","content":prompt}], system)
+        ctx = (f"\n\nGHI CHÚ NỘI BỘ (không đưa vào email):\n"
+               f"- Tóm tắt vụ việc: {analysis.get('summary','')}\n"
+               f"- Hành động nội bộ: {'; '.join(analysis.get('action_items',[]))}")
+
+    system = (
+        f"Bạn là Luật sư cao cấp tại {TEN_CONG_TY} — một hãng luật uy tín tại Việt Nam, "
+        f"chuyên giải quyết tranh chấp, bất động sản và doanh nghiệp, phục vụ khách hàng VVIP. "
+        f"Bạn soạn email phản hồi với phong thái của một luật sư hàng đầu: trang trọng, súc tích, "
+        f"có chiều sâu pháp lý nhưng không phô trương.\n\n"
+        f"QUY TẮC TRÌNH BÀY — BẮT BUỘC TUÂN THỦ NGHIÊM NGẶT:\n"
+        f"1. TUYỆT ĐỐI KHÔNG dùng bất kỳ ký tự markdown nào: KHÔNG dấu sao (*), KHÔNG dấu thăng (#), "
+        f"KHÔNG gạch ngang đầu dòng (-), KHÔNG chấm tròn (•), KHÔNG backtick (`), KHÔNG gạch dưới (_).\n"
+        f"2. Khi cần liệt kê, dùng cách diễn đạt pháp lý trang trọng: 'Thứ nhất, ...', 'Thứ hai, ...', "
+        f"'Thứ ba, ...' hoặc '(i) ..., (ii) ..., (iii) ...'.\n"
+        f"3. Khi cần nhấn mạnh, dùng câu văn rõ ràng hoặc viết HOA cụm từ then chốt — không bao quanh bằng dấu sao.\n"
+        f"4. Dùng kính ngữ chuẩn mực: 'Kính gửi Quý Khách hàng', 'Quý Công ty', 'Quý vị', "
+        f"'chúng tôi trân trọng', 'kính đề nghị', 'rất hân hạnh được phục vụ Quý vị'.\n"
+        f"5. Mỗi đoạn văn phải hoàn chỉnh, mạch lạc, không cụt câu, không viết tắt thiếu tôn trọng.\n"
+        f"6. Văn phong: trang trọng tối đa, súc tích, không cảm thán, không dùng emoji, không thân mật quá mức."
+    )
+
+    prompt = (
+        f"Hãy soạn email phản hồi tiếng Việt cho email dưới đây, theo giọng văn "
+        f"{tone_map.get(tone, tone_map['formal'])}.\n\n"
+        f"CẤU TRÚC BẮT BUỘC (viết liền mạch thành các đoạn văn, KHÔNG đánh số hay gạch đầu dòng):\n"
+        f"• Dòng mở: 'Kính gửi Quý Ông/Quý Bà [tên người nhận],' (chọn xưng hô phù hợp giới tính tên gọi)\n"
+        f"• Đoạn 1: Trân trọng xác nhận đã nhận được email và bày tỏ cảm ơn về sự tin tưởng.\n"
+        f"• Đoạn 2: Tóm lược súc tích nội dung Quý vị trình bày, thể hiện đã nghiên cứu kỹ.\n"
+        f"• Đoạn 3: Nêu hướng xử lý hoặc quan điểm pháp lý sơ bộ một cách thận trọng, chuyên nghiệp.\n"
+        f"• Đoạn 4: Đề xuất bước tiếp theo cụ thể (cuộc họp tư vấn, tài liệu cần cung cấp thêm, v.v.) "
+        f"kèm mốc thời gian rõ ràng.\n"
+        f"• Đoạn kết: Lời cảm ơn và cam kết phục vụ tận tâm.\n"
+        f"• Khối ký tên (mỗi dòng riêng):\n"
+        f"    Trân trọng,\n"
+        f"    {nd['ho_ten']}\n"
+        f"    {nd['chuc_vu']}\n"
+        f"    {TEN_CONG_TY}\n\n"
+        f"NHẮC LẠI: KHÔNG viết tiêu đề/subject. KHÔNG sử dụng ký tự markdown dưới mọi hình thức.\n\n"
+        f"━━━━━ EMAIL CẦN PHẢN HỒI ━━━━━\n"
+        f"Tiêu đề gốc: {email.get('subject','')}\n"
+        f"Người gửi: {email.get('fromName','')} <{email.get('fromEmail','')}>\n"
+        f"Nội dung:\n{email.get('body','')[:2000]}{ctx}"
+    )
+
+    result = goi_claude([{"role": "user", "content": prompt}], system)
+    return lam_sach_markdown(result)
 
 
 def gan_tag(email: dict) -> list:
