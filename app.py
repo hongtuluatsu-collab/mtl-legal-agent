@@ -641,12 +641,50 @@ nội dung (có căn cứ pháp lý), kính đề nghị, cam kết. Để [TR�
     return goi_claude(messages, system)
 
 def hoi_dap(lich_su, cau_hoi, files=None):
-    system = f"Bạn là chuyên gia pháp lý tại {TEN_CONG_TY}. Trả lời chuyên nghiệp, dẫn chiếu luật cụ thể khi cần."
+    """
+    Hỏi đáp pháp lý — đã fix để đọc được CẢ file text VÀ file ảnh
+    (bao gồm các trang PDF scan đã được chuyển thành ảnh PNG).
+    """
+    system = (
+        f"Bạn là chuyên gia pháp lý tại {TEN_CONG_TY}. "
+        f"Trả lời chuyên nghiệp, dẫn chiếu luật cụ thể khi cần. "
+        f"Nếu người dùng đã tải lên hồ sơ (bao gồm cả ảnh chụp, file scan, "
+        f"chữ viết tay), hãy đọc kỹ và tham chiếu nội dung đó khi trả lời."
+    )
     messages = list(lich_su)
+
     if files:
-        for item in files:
-            if item["loai"] != "anh":
-                messages.insert(0, {"role": "user", "content": f"[Hồ sơ - {item['ten']}]:\n{item['du_lieu'][:2000]}"})
+        # Tách 2 loại: text và ảnh
+        text_items  = [f for f in files if f["loai"] != "anh"]
+        image_items = [f for f in files if f["loai"] == "anh"]
+
+        # 1. Gom toàn bộ nội dung text thành 1 message (tiết kiệm token)
+        if text_items:
+            text_blob = "\n\n".join(
+                f"[Hồ sơ — {it['ten']}]:\n{it['du_lieu'][:2500]}"
+                for it in text_items
+            )
+            messages.insert(0, {"role": "user", "content": text_blob})
+
+        # 2. Gom tất cả ảnh vào 1 message với nhiều image block
+        #    Claude vision sẽ "đọc" được nội dung trong ảnh (kể cả OCR)
+        if image_items:
+            content_blocks = []
+            for it in image_items:
+                content_blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type":       "base64",
+                        "media_type": it["media_type"],
+                        "data":       it["du_lieu"],
+                    },
+                })
+                content_blocks.append({
+                    "type": "text",
+                    "text": f"[Trang scan / ảnh hồ sơ — {it['ten']}]",
+                })
+            messages.insert(0, {"role": "user", "content": content_blocks})
+
     messages.append({"role": "user", "content": cau_hoi})
     return goi_claude(messages, system)
 
