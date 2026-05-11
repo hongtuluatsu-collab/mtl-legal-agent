@@ -1174,15 +1174,9 @@ with tab3:
 # ══════════════════════════════════════════════
 with tab4:
     st.subheader("📋 Hướng dẫn sử dụng MTL Legal Agent Premium")
+
+    # ── Hướng dẫn chung: TẤT CẢ luật sư đều thấy ────────────────
     st.markdown(f"""
-### 🔑 Cấu hình API Key (chỉ làm 1 lần)
-
-Vào **Railway** → tab **Variables** → thêm: `ANTHROPIC_API_KEY = sk-ant-...`
-
-Lấy key tại: **console.anthropic.com**
-
----
-
 ### 🚀 Sử dụng hàng ngày
 
 **Bước 1:** Tải hồ sơ vụ việc ở thanh bên trái (PDF, Word, ảnh chụp, chữ viết tay).
@@ -1194,20 +1188,55 @@ Lấy key tại: **console.anthropic.com**
 - **Email Intelligence** — Đọc Gmail, phân tích AI, soạn phản hồi tự động.
 - **Quản lý Công việc** — Task list, lịch tuần, báo cáo Thứ 5 tự động.
 
----
-
-### 👥 Danh sách tài khoản
-
-| Tài khoản | Mật khẩu | Họ tên |
-|-----------|----------|--------|
-""" + "\n".join([f"| `{tk}` | `{info['mat_khau']}` | {info['ho_ten']} |" for tk, info in TAI_KHOAN.items()]) + f"""
+**Bước 3:** Tài khoản của bạn được Ban Quản trị cấp riêng. Vui lòng KHÔNG chia sẻ mật khẩu cho người khác. Nếu quên hoặc cần đổi mật khẩu, liên hệ Quản trị viên.
 
 ---
+
+### 🔒 Bảo mật
+
+Dữ liệu của bạn (hồ sơ, task, chat, email) được lưu trên Drive Công ty với cơ chế cách ly nghiêm ngặt — luật sư khác KHÔNG xem được dữ liệu của bạn. Khi rời máy, vui lòng nhấn 🚪 Đăng xuất ở cuối thanh bên trái.
+
+---
+
 ### 🏢 {TEN_CONG_TY}
 {DIA_CHI_CT}  
 {DIA_CHI_DN}  
 {SBT_CT}
 """)
+
+    # ── Khu vực dành riêng cho Quản trị viên ────────────────────
+    if nd.get("vai_tro") == "quan_tri":
+        st.markdown("---")
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,{MTL_NAVY2},{MTL_NAVY});"
+            f"border-left:4px solid {MTL_GOLD};border-radius:8px;padding:10px 16px;"
+            f"margin-bottom:14px;'>"
+            f"<span style='color:white;font-weight:700;font-size:0.95rem;'>"
+            f"🔐 Khu vực Quản trị viên</span>"
+            f"<span style='color:{MTL_GOLD2};font-size:0.78rem;margin-left:10px;'>"
+            f"(Nội dung dưới đây chỉ admin nhìn thấy)</span></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("### 🔑 Cấu hình API Key (chỉ làm 1 lần)")
+        st.markdown(
+            "Vào **Railway** → tab **Variables** → thêm: "
+            "`ANTHROPIC_API_KEY = sk-ant-...`\n\n"
+            "Lấy key tại: **console.anthropic.com**"
+        )
+
+        st.markdown("### 👥 Danh sách tài khoản hệ thống")
+        st.caption("⚠️ Bảng dưới chứa thông tin nhạy cảm. Không chia sẻ ra ngoài.")
+
+        # Hiển thị bảng tài khoản qua expander để admin phải chủ động mở
+        with st.expander("👁 Hiện danh sách tài khoản & mật khẩu", expanded=False):
+            tk_table = "| Tài khoản | Mật khẩu | Họ tên | Vai trò |\n|---|---|---|---|\n"
+            tk_table += "\n".join(
+                f"| `{tk}` | `{info['mat_khau']}` | {info['ho_ten']} | "
+                f"{'Quản trị' if info['vai_tro']=='quan_tri' else 'Luật sư'} |"
+                for tk, info in TAI_KHOAN.items()
+            )
+            st.markdown(tk_table)
 
     # ── Panel kiểm tra Service Account (chỉ admin xem được) ──
     if nd.get("vai_tro") == "quan_tri":
