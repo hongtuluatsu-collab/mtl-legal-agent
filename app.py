@@ -9,6 +9,11 @@ Cài đặt (chạy 1 lần):
 Chạy app:
   streamlit run app.py
 =============================================================
+PHIÊN BẢN CẬP NHẬT:
+  - Fix lỗi AI soạn email không hiển thị nội dung (widget state collision)
+  - Cập nhật model name hợp lệ: claude-sonnet-4-6
+  - Parse response AI an toàn (multi-block)
+=============================================================
 """
 
 import streamlit as st
@@ -505,22 +510,27 @@ def doc_docx(file_bytes):
         return f"Lỗi đọc DOCX: {e}"
 
 # ─────────────────────────────────────────────
-#  HÀM GỌI CLAUDE
+#  HÀM GỌI CLAUDE — ĐÃ FIX
+#  • Model name hợp lệ: claude-sonnet-4-6
+#  • Parse multi-block an toàn
+#  • Báo lỗi rõ ràng khi rỗng
 # ─────────────────────────────────────────────
 def goi_claude(messages, system_prompt):
     try:
         client = anthropic.Anthropic(api_key=API_KEY)
         response = client.messages.create(
-            model="claude-sonnet-4-6",   # ← đổi từ "claude-opus-4-5"
+            model="claude-sonnet-4-6",
             max_tokens=4096,
             system=system_prompt,
             messages=messages,
         )
         # Parse an toàn — duyệt qua mọi text block
-        return "".join(b.text for b in response.content if hasattr(b, "text")) \
-               or "⚠️ AI trả về nội dung rỗng."
+        text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        return text if text.strip() else "⚠️ AI trả về nội dung rỗng. Hãy thử lại."
     except anthropic.AuthenticationError:
-        return "❌ API Key không hợp lệ."
+        return "❌ API Key không hợp lệ. Kiểm tra biến ANTHROPIC_API_KEY trên Railway."
+    except anthropic.NotFoundError as e:
+        return f"❌ Model không tồn tại: {e}"
     except Exception as e:
         return f"❌ Lỗi gọi AI: {e}"
 
@@ -836,7 +846,7 @@ padding:8px 12px;font-size:0.78rem;color:#90ee90;margin-bottom:12px;">
         st.markdown("""
 <div style="background:rgba(220,80,80,0.15);border:1px solid #c04040;border-radius:8px;
 padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
-⚠️ Chưa có API Key!<br>Mở file app.py → tìm dòng ANTHROPIC_API_KEY → dán key vào
+⚠️ Chưa có API Key!<br>Mở Railway → Variables → thêm ANTHROPIC_API_KEY
 </div>""", unsafe_allow_html=True)
 
     st.markdown(f"<div style='height:1px;background:rgba(168,135,74,0.25);margin:4px 0 12px;'></div>", unsafe_allow_html=True)
@@ -1125,7 +1135,7 @@ with tab1:
 
     if nut_pt:
         if not API_KEY:
-            st.error("❌ Chưa có API Key. Mở file app.py, tìm dòng ANTHROPIC_API_KEY và điền key vào.")
+            st.error("❌ Chưa có API Key. Mở Railway → Variables → thêm ANTHROPIC_API_KEY.")
         elif not st.session_state.noi_dung_files:
             st.warning("⚠️ Vui lòng tải ít nhất 1 file hồ sơ ở thanh bên trái.")
         else:
@@ -1187,7 +1197,7 @@ with tab2:
 
     if st.button("✍️ Soạn văn bản", type="primary"):
         if not API_KEY:
-            st.error("❌ Chưa có API Key. Mở file app.py, tìm dòng ANTHROPIC_API_KEY và điền key vào.")
+            st.error("❌ Chưa có API Key. Mở Railway → Variables → thêm ANTHROPIC_API_KEY.")
         elif not noi_dung_vv.strip():
             st.warning("⚠️ Vui lòng nhập thông tin vụ việc.")
         else:
@@ -1234,7 +1244,7 @@ with tab3:
 
     if cau_hoi:
         if not API_KEY:
-            st.error("❌ Chưa có API Key. Mở file app.py, tìm dòng ANTHROPIC_API_KEY và điền key vào.")
+            st.error("❌ Chưa có API Key. Mở Railway → Variables → thêm ANTHROPIC_API_KEY.")
         else:
             st.session_state.lich_su_chat.append({"role": "user", "content": cau_hoi})
             with st.chat_message("user", avatar="👤"):
@@ -1258,11 +1268,11 @@ with tab4:
     st.markdown(f"""
 ### 🔑 Cấu hình API Key (chỉ làm 1 lần)
 
-Mở file `app.py` → tìm dòng số **21**:
+Vào **Railway** → tab **Variables** → thêm:
 ```
-ANTHROPIC_API_KEY = "sk-ant-"
+ANTHROPIC_API_KEY = sk-ant-...
 ```
-Thay `sk-ant-` bằng key thật của bạn. Lấy key tại: **console.anthropic.com**
+Lấy key tại: **console.anthropic.com**
 
 ---
 
@@ -1274,6 +1284,8 @@ Thay `sk-ant-` bằng key thật của bạn. Lấy key tại: **console.anthrop
 - **Phân tích hồ sơ** — AI đọc toàn bộ hồ sơ, phân tích pháp lý, xuất báo cáo Word.
 - **Soạn thảo văn bản** — Chọn loại đơn, AI soạn đúng mẫu pháp lý, tải về Word.
 - **Hỏi đáp pháp lý** — Chat trực tiếp về luật và hồ sơ đã tải lên.
+- **Email Intelligence** — Đọc email Gmail, phân tích AI, soạn phản hồi tự động.
+- **Quản lý Công việc** — Task list, lịch tuần, báo cáo tự động.
 
 ---
 
@@ -1459,9 +1471,11 @@ EMAIL_MAU = [
 #  RENDER TAB 5
 # ══════════════════════════════════════════════
 with tab5:
+    # ⚠️ FIX: Thêm "ei_ta" vào session_state init để text_area hoạt động đúng
     for _k, _v in {
         "ei_emails":[], "ei_selected":None,
         "ei_analysis":None, "ei_draft":"",
+        "ei_ta":"",                              # ← KEY của text_area, BẮT BUỘC khởi tạo
         "ei_tone":"formal", "ei_sent":[],
     }.items():
         if _k not in st.session_state:
@@ -1534,7 +1548,9 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                              type="primary" if is_sel else "secondary"):
                     st.session_state.ei_selected = em
                     st.session_state.ei_analysis  = None
+                    # FIX: Reset cả ei_draft và ei_ta khi đổi email
                     st.session_state.ei_draft     = ""
+                    st.session_state.ei_ta        = ""
                     st.rerun()
 
     # ── CỘT 2: NỘI DUNG EMAIL ───────────────
@@ -1574,8 +1590,11 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
             with qb:
                 if st.button("✦ Soạn thảo", use_container_width=True, key="ei_draft_btn"):
                     with st.spinner("Claude đang soạn..."):
-                        st.session_state.ei_draft = soan_phan_hoi(
+                        draft_text = soan_phan_hoi(
                             em, st.session_state.ei_analysis, st.session_state.ei_tone)
+                    # FIX: Gán cả ei_ta (key của widget) và ei_draft
+                    st.session_state.ei_draft = draft_text
+                    st.session_state.ei_ta    = draft_text
                     st.rerun()
             with qc:
                 if st.button("📄 Tạo văn bản", use_container_width=True, key="ei_docbtn"):
@@ -1660,24 +1679,30 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                                     format_func=lambda x: tone_vi[x],
                                     horizontal=True, key="ei_tone_r")
                 st.session_state.ei_tone = tone_sel
+
+                # ⚠️ FIX QUAN TRỌNG: Khi bấm "Tạo nháp AI" phải gán
+                # giá trị vào CẢ ei_draft VÀ ei_ta (key của widget)
                 if st.button("✦ Tạo nháp AI", use_container_width=True, key="ei_gen"):
                     with st.spinner("Claude đang soạn..."):
-                    ai_draft = soan_phan_hoi(em, st.session_state.ei_analysis, tone_sel)
-                    # ✅ Cập nhật TRỰC TIẾP vào key của widget — không qua biến trung gian
-                    st.session_state.ei_ta = ai_draft
+                        ai_draft = soan_phan_hoi(
+                            em, st.session_state.ei_analysis, tone_sel)
                     st.session_state.ei_draft = ai_draft
+                    st.session_state.ei_ta    = ai_draft   # ← BẮT BUỘC để text_area cập nhật
                     st.rerun()
 
                 reply_to = st.text_input("Gửi đến", value=em.get("fromEmail",""), key="ei_to")
 
-                # ✅ Bỏ value= đi, chỉ dùng key — Streamlit sẽ tự lấy giá trị từ st.session_state.ei_ta
+                # ⚠️ FIX: Bỏ tham số value=, chỉ giữ key= — Streamlit sẽ
+                # tự lấy giá trị từ st.session_state.ei_ta
                 draft = st.text_area(
                     "Nội dung phản hồi",
                     height=240,
                     key="ei_ta",
-                    placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn..."
+                    placeholder="Nhấn '✦ Tạo nháp AI' hoặc tự soạn...",
                 )
+                # Đồng bộ giá trị user gõ vào ei_draft (giữ tương thích logic gốc)
                 st.session_state.ei_draft = draft
+
                 sa, sb = st.columns(2)
                 with sa:
                     if draft.strip():
@@ -1702,7 +1727,9 @@ border-left:4px solid {MTL_GOLD};display:flex;align-items:center;justify-content
                                     "body": draft, "time": datetime.now().strftime("%H:%M %d/%m"),
                                 })
                                 st.success("✅ Email đã gửi!")
+                                # FIX: Reset cả ei_draft và ei_ta sau khi gửi
                                 st.session_state.ei_draft = ""
+                                st.session_state.ei_ta    = ""
                                 st.rerun()
 
             with ai3:
@@ -1831,7 +1858,6 @@ def them_task_vao_gcal(task: dict) -> str | None:
 #  • Báo cáo tuần tự động — gửi Gmail Thứ 5 20:00
 # ══════════════════════════════════════════════════════════════
 
-# ── Session-state khởi tạo (prefix mtl_task_ tránh xung đột) ──
 # ── 5 Task cứng bắt buộc mỗi tuần ──────────────────────────────
 MANDATORY_TASKS = [
     {
@@ -1871,6 +1897,7 @@ MANDATORY_TASKS = [
     },
 ]
 
+# ── Session-state khởi tạo (prefix mtl_task_ tránh xung đột) ──
 _task_defaults = {
     "mtl_tasks":          [],   # Danh sách task thường
     "mtl_task_edit_id":   None, # ID task đang sửa
