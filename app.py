@@ -491,6 +491,91 @@ if not st.session_state.dang_nhap:
 #  HÀM ĐỌC FILE
 # ─────────────────────────────────────────────
 def doc_pdf(file_bytes):
+    def doc_pdf_thong_minh(file_bytes, ten_file, max_trang_anh=20):
+    """
+    Đọc PDF thông minh — xử lý được cả 3 loại:
+      • PDF text thường (có lớp text) → trích xuất text
+      • PDF ảnh / PDF scan (ảnh chụp, file scan) → render từng trang thành PNG
+        rồi gửi cho Claude vision đọc như ảnh
+      • PDF hỗn hợp (vừa có text vừa có trang scan) → kết hợp cả hai
+
+    Trả về list các item theo định dạng noi_dung_files của app.
+    max_trang_anh: giới hạn số trang scan để tránh tốn token vision.
+    """
+    import fitz  # PyMuPDF
+
+    results = []
+
+    try:
+        pdf_doc = fitz.open(stream=file_bytes, filetype="pdf")
+        text_parts = []
+        pages_without_text = []
+
+        # ── Bước 1: Quét toàn bộ PDF, phân loại trang text vs trang ảnh ──
+        for i, page in enumerate(pdf_doc):
+            txt = page.get_text().strip()
+            if txt and len(txt) > 40:   # Trang có text "đáng kể"
+                text_parts.append(f"[Trang {i+1}]\n{txt}")
+            else:
+                pages_without_text.append(i)
+
+        # ── Trường hợp A: PDF có text đầy đủ, không trang scan ──
+        if text_parts and not pages_without_text:
+            results.append({
+                "ten":     ten_file,
+                "loai":    "pdf",
+                "du_lieu": "\n\n".join(text_parts),
+            })
+            pdf_doc.close()
+            return results
+
+        # ── Trường hợp B & C: PDF scan toàn phần hoặc hỗn hợp ──
+        # Thêm phần text (nếu có)
+        if text_parts:
+            results.append({
+                "ten":     f"{ten_file} — phần có sẵn text",
+                "loai":    "pdf",
+                "du_lieu": "\n\n".join(text_parts),
+            })
+
+        # Render các trang scan thành ảnh PNG độ phân giải đủ để OCR vision
+        so_trang_render = min(len(pages_without_text), max_trang_anh)
+        for k in range(so_trang_render):
+            page_idx = pages_without_text[k]
+            page = pdf_doc[page_idx]
+            # zoom 1.5x → ~1275×1800px, vừa với giới hạn Claude vision (1568px)
+            mat = fitz.Matrix(1.5, 1.5)
+            pix = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("png")
+
+            results.append({
+                "ten":        f"{ten_file} — Trang {page_idx + 1} (ảnh scan)",
+                "loai":       "anh",
+                "du_lieu":    base64.standard_b64encode(img_bytes).decode(),
+                "media_type": "image/png",
+            })
+
+        # Cảnh báo nếu cắt bớt trang
+        if len(pages_without_text) > max_trang_anh:
+            results.append({
+                "ten":     f"{ten_file} — Cảnh báo",
+                "loai":    "pdf",
+                "du_lieu": (f"⚠️ PDF có {len(pages_without_text)} trang ảnh scan, "
+                            f"nhưng chỉ {max_trang_anh} trang đầu được đưa vào AI để tránh "
+                            f"vượt giới hạn token. Vui lòng tách file PDF nếu cần phân tích đủ."),
+            })
+
+        pdf_doc.close()
+        return results
+
+    except Exception as e:
+        # Fallback về PyPDF2 nếu PyMuPDF lỗi (rất hiếm khi xảy ra)
+        text = doc_pdf(file_bytes)
+        return [{
+            "ten":     ten_file,
+            "loai":    "pdf",
+            "du_lieu": text + f"\n\n[⚠️ Không đọc được ảnh scan: {e}]",
+        }]
     try:
         reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
         noi_dung = []
@@ -1001,7 +1086,10 @@ padding:8px 12px;font-size:0.78rem;color:#ff9090;margin-bottom:12px;">
             data = f.read()
             ext  = f.name.rsplit(".", 1)[-1].lower()
             if ext == "pdf":
-                st.session_state.noi_dung_files.append({"ten": f.name, "loai": "pdf", "du_lieu": doc_pdf(data)})
+            # ⚠️ FIX: Đọc PDF thông minh — xử lý cả PDF text VÀ PDF scan (ảnh)
+            with st.spinner(f"📄 Đang xử lý {f.name}..."):
+                pdf_items = doc_pdf_thong_minh(data, f.name)
+            st.session_state.noi_dung_files.extend(pdf_items)
             elif ext == "docx":
                 st.session_state.noi_dung_files.append({"ten": f.name, "loai": "docx", "du_lieu": doc_docx(data)})
             elif ext in ["png", "jpg", "jpeg", "tiff", "bmp"]:
